@@ -37,6 +37,13 @@ async def home_devices(query: Optional[str] = None, domain: Optional[str] = None
     return await _wrap(HA.list_entities(query, domain))
 
 
+async def home_overview(only_offline: bool = False) -> Dict[str, Any]:
+    async def run():
+        devs = await HA.devices()
+        return {"devices": devs, "summary": HA.describe_devices(devs, only_offline=bool(only_offline))}
+    return await _wrap(run())
+
+
 async def home_state(entity_id: str) -> Dict[str, Any]:
     return await _wrap(HA.get_state(entity_id))
 
@@ -67,6 +74,12 @@ _SCHEMAS = {
         "switch, cover, fan, sensor). Call this first to find the entity_id.",
         {"query": {"type": "string", "description": "Name or entity_id fragment, e.g. 客廳"},
          "domain": {"type": "string", "description": "Domain such as light, climate, switch"}}, []),
+    "home_overview": _fn(
+        "home_overview",
+        "All physical devices in the house, one row each (not every sub-feature), with "
+        "room, online/offline and how long a device has been offline. Use for '哪些設備"
+        "離線', '家裡有哪些設備', or before acting on several devices.",
+        {"only_offline": {"type": "boolean", "description": "true to list only offline devices"}}, []),
     "home_state": _fn(
         "home_state", "Current state and attributes of one device (e.g. temperature, on/off).",
         {"entity_id": {"type": "string"}}, ["entity_id"]),
@@ -100,6 +113,7 @@ _SCHEMAS = {
 
 HOME_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
     (home_devices, _SCHEMAS["home_devices"], "low"),
+    (home_overview, _SCHEMAS["home_overview"], "low"),
     (home_state, _SCHEMAS["home_state"], "low"),
     (home_control, _SCHEMAS["home_control"], "low"),
     (home_assist, _SCHEMAS["home_assist"], "low"),

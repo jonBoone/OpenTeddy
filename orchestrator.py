@@ -988,6 +988,10 @@ class Orchestrator:
                      if (req.context or {}).get("triggered_by") != "schedule" else None)
             if _code:
                 return await self._home_confirm(req, _code)
+            from home_intent import parse_home_query
+            _home_q = parse_home_query(req.goal)
+            if _home_q:
+                return await self._home_overview(req, _home_q)
             _home_text = parse_home_command(req.goal)
             if _home_text:
                 _home_res = await self._home_fast(req, _home_text)
@@ -1388,6 +1392,15 @@ class Orchestrator:
             lines.append(("⚠️ 沒有成功：" if zh else "⚠️ Failed: ") + "、".join(res["failed"]))
         logger.info("Home fast path for task %s: %s → %s", req.id, text, res["targets"])
         return await self._finish_direct(req, "\n".join(lines), not res["failed"])
+
+    async def _home_overview(self, req: TaskRequest, kind: str) -> TaskResult:
+        """哪些設備離線 / 家裡有哪些設備, straight from Home Assistant."""
+        import home_assistant as HA
+        try:
+            devs = await HA.devices()
+        except HA.HAError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
 
     async def _home_confirm(self, req: TaskRequest, code: str) -> TaskResult:
         import home_assistant as HA

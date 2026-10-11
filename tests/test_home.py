@@ -34,6 +34,24 @@ STATES = [
 ]
 
 
+import json as _json
+from datetime import datetime, timedelta, timezone
+_NOW = datetime.now(timezone.utc)
+TEMPLATE_ROWS = [  # entity → device, the shape HA's template engine returns
+    {"e": "light.lamp5", "st": "on", "lc": _NOW.isoformat(), "d": "dev1", "dn": "皓檯燈", "et": "", "a": "皓房間"},
+    {"e": "button.lamp5_reset", "st": "unknown", "lc": _NOW.isoformat(), "d": "dev1", "dn": "皓檯燈", "et": "", "a": "皓房間"},
+    {"e": "sensor.hub_illum", "st": "unavailable", "lc": (_NOW - timedelta(days=3)).isoformat(), "d": "dev2", "dn": "Mi Control Hub", "et": "", "a": "客廳"},
+    {"e": "button.hub_x", "st": "unknown", "lc": _NOW.isoformat(), "d": "dev2", "dn": "Mi Control Hub", "et": "", "a": "客廳"},
+    {"e": "vacuum.s5", "st": "unavailable", "lc": (_NOW - timedelta(hours=5)).isoformat(), "d": "dev3", "dn": "Roborock S5", "et": "", "a": "客廳"},
+    {"e": "sensor.cam_status", "st": "unavailable", "lc": _NOW.isoformat(), "d": "dev4", "dn": "攝影機", "et": "", "a": ""},
+    {"e": "switch.cam_motion", "st": "on", "lc": _NOW.isoformat(), "d": "dev4", "dn": "攝影機", "et": "", "a": ""},
+    {"e": "button.repeater", "st": "unknown", "lc": _NOW.isoformat(), "d": "dev5", "dn": "房間前wifi", "et": "", "a": ""},
+    {"e": "sensor.sun_next_dawn", "st": "2026-10-12", "lc": _NOW.isoformat(), "d": "dev6", "dn": "Sun", "et": "DeviceEntryType.SERVICE", "a": ""},
+    {"e": "sensor.xiaomi_message", "st": "hi", "lc": _NOW.isoformat(), "d": "", "dn": "Xiaomi message", "et": "", "a": ""},
+    {"e": "update.hacs", "st": "off", "lc": _NOW.isoformat(), "d": "dev7", "dn": "Updater", "et": "", "a": ""},
+]
+
+
 class _Resp:
     def __init__(self, status, payload):
         self.status_code, self._p, self.text = status, payload, str(payload)
@@ -62,6 +80,8 @@ class _Client:
             return _Resp(200, next(s for s in STATES if s["entity_id"] == eid))
         if path == "/api/config":
             return _Resp(200, {"version": "2026.10.1", "location_name": "家", "language": "zh-Hant"})
+        if path == "/api/template":
+            return _Resp(200, TEMPLATE_ROWS)
         if path == "/api/conversation/process":
             return _Resp(200, _Client.assist_reply)
         if path.startswith("/api/services/"):
@@ -95,7 +115,13 @@ def test_intent() -> None:
     assert HI.parse_confirmation("confirm 4321") == "4321"
     for t in ("確認 12345", "我確認 1234", "確認一下 1234 是什麼", "1234"):
         assert HI.parse_confirmation(t) is None, t
+    for t, kind in (("家裡有哪些設備離線", "offline"), ("有設備斷線嗎", "offline"), ("what devices are offline", "offline"),
+                    ("家裡有哪些設備", "list"), ("設備清單", "list"), ("列出所有裝置", "list")):
+        assert HI.parse_home_query(t) == kind, t
+    for t in ("我的網路離線了", "the wifi is offline", "關客廳燈", "離線時提醒我並寄信給老闆", "今天天氣"):
+        assert HI.parse_home_query(t) is None, t
     print("  ✓ device commands recognised; sensitive words, other work and attachments are not; 確認 code exact")
+    print("  ✓ 哪些設備離線 / 家裡有哪些設備 recognised; 'my internet is offline' is not")
 
 
 # ── B ────────────────────────────────────────────────────────────────────────
@@ -188,6 +214,21 @@ async def test_client() -> None:
     _Client.fail = {}
     print("  ✓ 小愛: say, run as a spoken command, fallback to the text entity")
 
+    devs = await HA.devices()
+    names = {d["name"]: d for d in devs}
+    assert set(names) == {"皓檯燈", "Mi Control Hub", "Roborock S5", "攝影機", "房間前wifi"}, set(names)
+    assert names["皓檯燈"]["online"] and names["攝影機"]["online"] and names["房間前wifi"]["online"]
+    assert not names["Mi Control Hub"]["online"] and names["Mi Control Hub"]["offline_for"] == "3 天"
+    assert not names["Roborock S5"]["online"] and names["Roborock S5"]["offline_for"] == "5 小時"
+    off = HA.describe_devices(devs, only_offline=True)
+    assert off.startswith("📴 離線的設備（2 台）：") and "• 客廳 · Mi Control Hub，已離線 3 天" in off, off
+    assert "其他 3 台在線" in off
+    full = HA.describe_devices(devs, only_offline=False)
+    assert full.startswith("🏠 家裡共有 5 台設備，3 台在線、2 台離線") and "**皓房間**" in full and "Roborock S5 📴 離線" in full, full
+    assert HA.describe_devices([d for d in devs if d["online"]], True) == "✅ 所有 3 台設備都在線。"
+    print("  ✓ devices: one row per physical device (no Sun / service / device-less / updates); "
+          "offline only when nothing has a real state; how long; grouped by room")
+
 
 # ── C ────────────────────────────────────────────────────────────────────────
 
@@ -204,7 +245,9 @@ async def test_tools() -> None:
     assert r["success"] and r["result"]["mode"] == "say"
     from tool_registry import tool_registry
     tool_registry.auto_register_all()
-    for name in ("home_devices", "home_state", "home_control", "home_assist", "xiaoai"):
+    r = await home_tool.home_overview(only_offline=True)
+    assert r["success"] and r["result"]["summary"].startswith("📴")
+    for name in ("home_devices", "home_overview", "home_state", "home_control", "home_assist", "xiaoai"):
         assert tool_registry.risk_of(name) == "low", name
     print("  ✓ tools: devices, held lock, bad id, 小愛; registered")
 
@@ -235,7 +278,7 @@ async def test_orchestrator() -> None:
     def fake():
         o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=planner,
                                   _classify_intent=planner, _fast_chat_response=planner)
-        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_direct_print", "_recent_uploads"):
+        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_home_overview", "_direct_print", "_recent_uploads"):
             setattr(o, name, (lambda n: lambda *a, **k: getattr(Orchestrator, n)(o, *a, **k))(name))
         return o
 
@@ -269,6 +312,12 @@ async def test_orchestrator() -> None:
     res = await run(f"確認 {code}")
     assert res.status == TaskStatus.FAILED and "過期" in res.summary
     print("  ✓ 確認 code from a person runs the held lock once; scheduled runs can't")
+
+    res = await run("家裡有哪些設備離線")
+    assert res.status == TaskStatus.COMPLETED and res.summary.startswith("📴 離線的設備（2 台）"), res
+    res = await run("家裡有哪些設備")
+    assert res.summary.startswith("🏠 家裡共有 5 台設備"), res.summary
+    print("  ✓ 哪些設備離線 / 家裡有哪些設備 answered straight from Home Assistant")
 
     _Client.down = True
     res = await run("關客廳燈")

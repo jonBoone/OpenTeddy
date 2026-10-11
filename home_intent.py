@@ -41,6 +41,27 @@ def parse_home_command(goal: str) -> Optional[str]:
     return t
 
 
+_OFFLINE = re.compile(r"(離線|斷線|不在線|沒有?連線|連不上|無法使用|不能用|掛掉|掛了|offline|unavailable|disconnected)", re.I)
+_LIST = re.compile(r"((有哪些|有什麼|列出|全部|所有|哪幾台).{0,6}(設備|裝置)|(設備|裝置)\s*(清單|列表|狀態|有哪些)|"
+                   r"\b(list|what|which)\b.{0,20}\bdevices\b)", re.I)
+
+
+_ABOUT_DEVICES = re.compile(r"(設備|裝置|東西|哪些|哪個|哪幾|有沒有|devices?|anything|what|which)", re.I)
+
+
+def parse_home_query(goal: str) -> Optional[str]:
+    """"offline" for 哪些設備離線, "list" for 家裡有哪些設備, else None."""
+    t = (goal or "").strip()
+    limit = _MAX_TEXT if _CJK.search(t) else _MAX_TEXT * 2
+    if not t or t.startswith("[Attachments in workspace") or len(t) > limit or _MULTI.search(t):
+        return None
+    if _OFFLINE.search(t) and _ABOUT_DEVICES.search(t):
+        return "offline"
+    if _LIST.search(t):
+        return "list"
+    return None
+
+
 def parse_confirmation(goal: str) -> Optional[str]:
     """The code when the message is exactly "確認 1234"."""
     m = _CONFIRM.match(goal or "")

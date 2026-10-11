@@ -127,6 +127,100 @@ async def status() -> Dict[str, Any]:
             "xiaoai": await _find_xiaoai(states)}
 
 
+# ── Devices (grouped) ───────────────────────────────────────────────────────
+
+_SKIP_DOMAINS = {"sun", "zone", "person", "update", "automation", "script", "scene", "conversation",
+                 "tts", "event", "weather", "stt", "wake_word", "assist_satellite", "input_boolean",
+                 "input_number", "input_select", "input_text", "input_datetime", "input_button",
+                 "todo", "calendar", "device_tracker", "image", "notify"}
+
+# One template call: every entity with its device, area and last change —
+# HA's template engine knows the device registry; REST /api/states doesn't.
+_DEVICES_TEMPLATE = (
+    "[{% for s in states %}{% set d = device_id(s.entity_id) %}"
+    "{\"e\":{{ s.entity_id|tojson }},\"st\":{{ s.state|tojson }},"
+    "\"lc\":{{ s.last_changed.isoformat()|tojson }},\"d\":{{ (d or '')|tojson }},"
+    "\"dn\":{{ ((device_attr(d, 'name_by_user') or device_attr(d, 'name')) if d else s.name)|tojson }},"
+    "\"et\":{{ ((device_attr(d, 'entry_type') or '')|string if d else '')|tojson }},"
+    "\"a\":{{ (area_name(s.entity_id) or '')|tojson }}}"
+    "{% if not loop.last %},{% endif %}{% endfor %}]"
+)
+
+
+def _ago(iso: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        t = datetime.fromisoformat(iso)
+        secs = (datetime.now(timezone.utc) - t).total_seconds()
+    except (TypeError, ValueError):
+        return ""
+    if secs < 3600:
+        return f"{max(1, int(secs // 60))} 分鐘"
+    if secs < 86400:
+        return f"{int(secs // 3600)} 小時"
+    return f"{int(secs // 86400)} 天"
+
+
+async def devices() -> List[Dict[str, Any]]:
+    """[{name, area, online, entities, offline_for}] — one row per physical
+    device. Service "devices" (Sun, Backup, weather, TTS) and entities with
+    no device are left out. A device is offline when none of its entities
+    has a real state and at least one is unavailable: buttons sit at
+    "unknown" forever, and cloud integrations leave single unsupported
+    features unavailable on devices that are fine."""
+    import json as _json
+    raw = await _request("POST", "/api/template", json={"template": _DEVICES_TEMPLATE})
+    rows = _json.loads(raw) if isinstance(raw, str) else raw
+    groups: Dict[str, Dict[str, Any]] = {}
+    for r in rows or []:
+        if (r["e"].split(".", 1)[0] in _SKIP_DOMAINS or not r.get("d")
+                or "service" in str(r.get("et") or "").lower()):
+            continue
+        key = r["d"]
+        g = groups.setdefault(key, {"name": r.get("dn") or r["e"], "area": r.get("a") or "",
+                                    "states": [], "changed": []})
+        g["states"].append(r.get("st"))
+        if r.get("st") == "unavailable":          # when it went unavailable
+            g["changed"].append(r.get("lc") or "")
+        if not g["area"] and r.get("a"):
+            g["area"] = r["a"]
+    out = []
+    for g in groups.values():
+        real = any(st not in ("unavailable", "unknown", None) for st in g["states"])
+        online = real or "unavailable" not in g["states"]
+        out.append({"name": g["name"], "area": g["area"], "online": online,
+                    "entities": len(g["states"]),
+                    "offline_for": "" if online or not g["changed"] else _ago(max(g["changed"]))})
+    out.sort(key=lambda d: (d["online"], d["area"], d["name"]))
+    return out
+
+
+def describe_devices(devs: List[Dict[str, Any]], only_offline: bool) -> str:
+    """Plain-language answer for "哪些設備離線" / "家裡有哪些設備"."""
+    offline = [d for d in devs if not d["online"]]
+    online = [d for d in devs if d["online"]]
+    lines: List[str] = []
+    if only_offline:
+        if not offline:
+            return f"✅ 所有 {len(devs)} 台設備都在線。"
+        lines.append(f"📴 離線的設備（{len(offline)} 台）：")
+        for d in offline:
+            where = f"{d['area']} · " if d["area"] else ""
+            since = f"，已離線 {d['offline_for']}" if d["offline_for"] else ""
+            lines.append(f"• {where}{d['name']}{since}")
+        lines.append(f"\n✅ 其他 {len(online)} 台在線。")
+        return "\n".join(lines)
+    lines.append(f"🏠 家裡共有 {len(devs)} 台設備，{len(online)} 台在線、{len(offline)} 台離線：")
+    by_area: Dict[str, List[Dict[str, Any]]] = {}
+    for d in sorted(devs, key=lambda d: (not d["online"], d["name"])):
+        by_area.setdefault(d["area"] or "未分區", []).append(d)
+    for area, ds in by_area.items():
+        lines.append(f"\n**{area}**")
+        for d in ds:
+            lines.append(f"• {d['name']}" + ("" if d["online"] else " 📴 離線"))
+    return "\n".join(lines)
+
+
 # ── Acting ───────────────────────────────────────────────────────────────────
 
 def _confirm_domains() -> set:
