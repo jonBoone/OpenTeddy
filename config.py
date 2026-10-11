@@ -451,6 +451,14 @@ class Config:
     print_max_copies: int = field(
         default_factory=lambda: int(os.getenv("PRINT_MAX_COPIES", "20") or 20)
     )
+    # Home Assistant (home_assistant.py). Token = a long-lived access token
+    # from the HA profile page. ha_confirm_domains are held for "確認 <code>".
+    ha_url: str = field(default_factory=lambda: os.getenv("HA_URL", "http://127.0.0.1:8123"))
+    ha_token: str = field(default_factory=lambda: os.getenv("HA_TOKEN", ""))
+    ha_language: str = field(default_factory=lambda: os.getenv("HA_LANGUAGE", "zh-tw"))
+    ha_confirm_domains: str = field(default_factory=lambda: os.getenv(
+        "HA_CONFIRM_DOMAINS", "lock,alarm_control_panel,valve,siren,water_heater"))
+    xiaoai_entity: str = field(default_factory=lambda: os.getenv("XIAOAI_ENTITY", ""))
     # Inbound (Telegram → OpenTeddy) — long-polling bridge.
     # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
     # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
@@ -963,6 +971,9 @@ class Config:
 
         if "printer_name" in settings:
             self.printer_name = (settings["printer_name"] or "").strip()
+        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity"):
+            if k in settings:
+                setattr(self, k, (settings[k] or "").strip())
         if (settings.get("print_max_copies") or "").strip().isdigit():
             self.print_max_copies = max(1, min(200, int(settings["print_max_copies"])))
 

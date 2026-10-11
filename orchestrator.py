@@ -972,6 +972,28 @@ class Orchestrator:
             if _print_cmd is not None:
                 return await self._direct_print(req, _print_cmd)
 
+        # ── 0b. Home: "確認 1234" and short device commands → Home Assistant ──
+        # "關客廳燈" goes to HA Assist and is done in about a second; if Assist
+        # doesn't understand, the normal pipeline (with the home_* tools)
+        # takes over. A confirmation code only counts from a person, never
+        # from a scheduled run.
+        try:
+            import home_assistant as _HA
+            from home_intent import parse_home_command, parse_confirmation
+            _home_on = _HA.configured()
+        except Exception:  # noqa: BLE001
+            _home_on = False
+        if _home_on:
+            _code = (parse_confirmation(req.goal)
+                     if (req.context or {}).get("triggered_by") != "schedule" else None)
+            if _code:
+                return await self._home_confirm(req, _code)
+            _home_text = parse_home_command(req.goal)
+            if _home_text:
+                _home_res = await self._home_fast(req, _home_text)
+                if _home_res is not None:
+                    return _home_res
+
         # ── 0a. Chat-mode short-circuit (highest-priority fast path) ──
         # When the user has explicitly picked Chat mode for the session,
         # we already know this isn't going to involve tools — skip the
@@ -1333,6 +1355,48 @@ class Orchestrator:
                 pass
             return paths
         return []
+
+    async def _finish_direct(self, req: TaskRequest, summary: str, ok: bool) -> TaskResult:
+        """Record a task answered without planning (print, home) and return it."""
+        status = TaskStatus.COMPLETED if ok else TaskStatus.FAILED
+        st_rec = SubTask(parent_task_id=req.id, description=req.goal, agent=AgentRole.EXECUTOR,
+                         order=0, status=status, result=summary, confidence=1.0 if ok else 0.0)
+        try:
+            await self.tracker.create_subtask(st_rec)
+            await self.tracker.update_subtask(st_rec)
+            await self.tracker.update_task_status(req.id, status, summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Direct-path tracker write failed: %s", exc)
+        return TaskResult(task_id=req.id, status=status, summary=summary, subtasks=[st_rec],
+                          skills_used=[], new_skills_created=[])
+
+    async def _home_fast(self, req: TaskRequest, text: str) -> Optional[TaskResult]:
+        """A short device command through HA Assist. None = Assist didn't
+        understand it; the caller continues with the full pipeline."""
+        import home_assistant as HA
+        zh = bool(re.search(r"[\u3400-\u9fff]", text))
+        try:
+            res = await HA.assist(text, language=None if zh else "en")
+        except HA.HAError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        if not res["ok"]:
+            logger.info("Home fast path: Assist didn't handle %r (%s) — using the agent", text, res.get("code"))
+            return None
+        speech = res["speech"] or ("好了。" if zh else "Done.")
+        lines = [f"🏠 {speech}"]
+        if res["failed"]:
+            lines.append(("⚠️ 沒有成功：" if zh else "⚠️ Failed: ") + "、".join(res["failed"]))
+        logger.info("Home fast path for task %s: %s → %s", req.id, text, res["targets"])
+        return await self._finish_direct(req, "\n".join(lines), not res["failed"])
+
+    async def _home_confirm(self, req: TaskRequest, code: str) -> TaskResult:
+        import home_assistant as HA
+        try:
+            done = await HA.confirm(code)
+        except HA.HAError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        return await self._finish_direct(
+            req, f"🏠 已確認並執行：{done['entity_id']} → {done['service']}", True)
 
     async def _direct_print(self, req: TaskRequest, cmd: Any) -> TaskResult:
         """Print the attached files (or the session's latest upload) and

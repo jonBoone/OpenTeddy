@@ -4948,6 +4948,44 @@
               </div>
             </div>
 
+            <!-- Home Assistant — OpenTeddy controls the house through HA. -->
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="ha_heading">🏠 Home Assistant</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="ha_desc">
+                Say "關客廳燈" in chat or Telegram and it goes to Home Assistant.
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label data-i18n="ha_url_label">Home Assistant URL</label>
+                  <input type="text" id="inp_ha_url" placeholder="http://127.0.0.1:8123" />
+                </div>
+                <div class="field" style="flex:2">
+                  <label data-i18n="ha_token_label">Long-lived access token</label>
+                  <input type="password" id="inp_ha_token" autocomplete="off" data-i18n-placeholder="ha_token_placeholder" placeholder="Profile → Security → Long-lived access tokens" />
+                </div>
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field">
+                  <label data-i18n="ha_language_label">Assist language</label>
+                  <input type="text" id="inp_ha_language" placeholder="zh-tw" />
+                </div>
+                <div class="field" style="flex:2">
+                  <label data-i18n="ha_confirm_label">Need confirmation (確認 code)</label>
+                  <input type="text" id="inp_ha_confirm_domains" placeholder="lock,alarm_control_panel,valve,siren,water_heater" />
+                </div>
+                <div class="field">
+                  <label data-i18n="xiaoai_entity_label">小愛音箱 entity (optional)</label>
+                  <input type="text" id="inp_xiaoai_entity" placeholder="media_player.xiaomi_lx06_…" />
+                </div>
+              </div>
+              <div id="haStatus" style="font-size:0.76rem;color:var(--text-secondary);line-height:1.6;margin-bottom:0.6rem"></div>
+              <button type="button" class="mem-btn" onclick="checkHomeAssistant()" style="font-size:0.78rem">
+                <span>🔌</span><span data-i18n="ha_test">Test connection</span>
+              </button>
+              </div>
+            </div>
+
             <!-- Printer — "upload + 列印" and the print_file tool use the
                  default printer here (CUPS on this machine). -->
             <div class="settings-section collapsed">
@@ -10198,6 +10236,12 @@
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
         _setInput('inp_telegram_default_chat_id', s.telegram_default_chat_id?.value ?? '');
+        _setInput('inp_ha_url', s.ha_url?.value || 'http://127.0.0.1:8123');
+        _setInput('inp_ha_token', s.ha_token?.value ?? '');
+        _setInput('inp_ha_language', s.ha_language?.value || 'zh-tw');
+        _setInput('inp_ha_confirm_domains', s.ha_confirm_domains?.value ?? '');
+        _setInput('inp_xiaoai_entity', s.xiaoai_entity?.value ?? '');
+        if ((s.ha_token?.value || '').trim()) checkHomeAssistant();
         _printerSaved = s.printer_name?.value ?? '';
         _setInput('inp_print_max_copies', s.print_max_copies?.value || '20');
         refreshPrinters();
@@ -10248,6 +10292,28 @@
     }
 
     function _setInput(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
+
+    // ── Settings → Home Assistant ──────────────────────────────────────
+    async function checkHomeAssistant() {
+      const box = document.getElementById('haStatus');
+      if (!box) return;
+      box.textContent = t('ha_checking');
+      try {
+        const r = await fetch(`${API}/home/status`).then(res => res.json());
+        if (!r.configured) { box.textContent = t('ha_not_configured'); return; }
+        if (!r.success) { box.textContent = '⚠️ ' + (r.error || 'error'); return; }
+        const top = Object.entries(r.domains || {}).sort((a, b) => b[1] - a[1]).slice(0, 6)
+          .map(([d, n]) => `${d} ${n}`).join(' · ');
+        const lines = [
+          `✅ Home Assistant ${r.version || ''}${r.location ? ' · ' + r.location : ''} · ${r.entities} entities`,
+          top,
+          r.xiaoai ? `🔊 小愛音箱：${r.xiaoai}` : t('ha_no_xiaoai'),
+        ];
+        box.innerHTML = lines.filter(Boolean).map(escHtml).join('<br>');
+      } catch (e) {
+        box.textContent = '⚠️ ' + e;
+      }
+    }
 
     // ── Settings → Printer ─────────────────────────────────────────────
     // Fills the default-printer list from GET /printers (CUPS on the
@@ -11131,6 +11197,11 @@
         smtp_from:                document.getElementById('inp_smtp_from').value.trim(),
         webhook_secret:           document.getElementById('inp_webhook_secret').value,
         printer_name:             document.getElementById('inp_printer_name')?.value ?? '',
+        ha_url:                   document.getElementById('inp_ha_url')?.value.trim() ?? '',
+        ha_token:                 document.getElementById('inp_ha_token')?.value.trim() ?? '',
+        ha_language:              document.getElementById('inp_ha_language')?.value.trim() ?? '',
+        ha_confirm_domains:       document.getElementById('inp_ha_confirm_domains')?.value.trim() ?? '',
+        xiaoai_entity:            document.getElementById('inp_xiaoai_entity')?.value.trim() ?? '',
         print_max_copies:         document.getElementById('inp_print_max_copies')?.value || '20',
       };
       // Most settings shouldn't be overwritten with a blank on save
@@ -11144,6 +11215,7 @@
         'telegram_inbound_chat_id_whitelist',
         'smtp_host', 'smtp_user', 'smtp_password', 'smtp_from',
         'webhook_secret', 'printer_name',
+        'ha_token', 'ha_confirm_domains', 'xiaoai_entity',
       ]);
       Object.keys(payload).forEach(k => {
         if (payload[k] === '' && !ALLOW_EMPTY.has(k)) delete payload[k];

@@ -423,6 +423,31 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Upper limit on copies in one print request.",
         "type":        "int",
     },
+    "ha_url": {
+        "label":       "Home Assistant URL",
+        "description": "Where Home Assistant runs, e.g. http://127.0.0.1:8123.",
+        "type":        "text",
+    },
+    "ha_token": {
+        "label":       "Home Assistant access token",
+        "description": "Long-lived access token from your Home Assistant profile page.",
+        "type":        "secret",
+    },
+    "ha_language": {
+        "label":       "Home Assistant Assist language",
+        "description": "Language for short device commands, e.g. zh-tw or en.",
+        "type":        "text",
+    },
+    "ha_confirm_domains": {
+        "label":       "Domains that need confirmation",
+        "description": "Comma-separated. Actions on these are held until you reply 確認 <code>.",
+        "type":        "text",
+    },
+    "xiaoai_entity": {
+        "label":       "小愛音箱 entity",
+        "description": "Optional. media_player entity of the Xiao AI speaker; found automatically when empty.",
+        "type":        "text",
+    },
     "telegram_default_chat_id": {
         "label":       "Telegram Default Chat ID",
         "description": "Optional. When set, telegram_send can omit chat_id "
@@ -537,6 +562,11 @@ def _defaults_from_config() -> dict[str, str]:
         "telegram_bot_token":        str(config.telegram_bot_token),
         "telegram_default_chat_id":  str(config.telegram_default_chat_id),
         "printer_name":              str(getattr(config, "printer_name", "")),
+        "ha_url":                    str(getattr(config, "ha_url", "")),
+        "ha_token":                  str(getattr(config, "ha_token", "")),
+        "ha_language":               str(getattr(config, "ha_language", "zh-tw")),
+        "ha_confirm_domains":        str(getattr(config, "ha_confirm_domains", "")),
+        "xiaoai_entity":             str(getattr(config, "xiaoai_entity", "")),
         "print_max_copies":          str(getattr(config, "print_max_copies", 20)),
         "telegram_inbound_enabled":  "true" if getattr(config, "telegram_inbound_enabled", False) else "false",
         "telegram_inbound_chat_id_whitelist": str(getattr(config, "telegram_inbound_chat_id_whitelist", "")),
@@ -910,6 +940,9 @@ class SettingsStore:
 
         if "printer_name" in settings:
             config.printer_name = (settings["printer_name"] or "").strip()
+        for k in ("ha_url", "ha_token", "ha_language", "ha_confirm_domains", "xiaoai_entity"):
+            if k in settings:
+                setattr(config, k, (settings[k] or "").strip())
         vpc = _int("print_max_copies")
         if vpc is not None:
             config.print_max_copies = max(1, min(200, vpc))

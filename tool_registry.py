@@ -525,6 +525,9 @@ class ToolRegistry:
         # upload is handled before planning (print_intent.py); these cover
         # printing as one step of a bigger job.
         from tools.print_tool import PRINT_TOOLS
+        # Smart home through Home Assistant (home_assistant.py). Short
+        # commands go straight to HA Assist before planning (home_intent.py).
+        from tools.home_tool import HOME_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -533,7 +536,7 @@ class ToolRegistry:
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
             + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
-            + PRINT_TOOLS
+            + PRINT_TOOLS + HOME_TOOLS
         ):
             self.register(fn, schema, risk)
 

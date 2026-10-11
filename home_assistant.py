@@ -1,0 +1,235 @@
+"""
+Home Assistant bridge: OpenTeddy controls the house through HA.
+
+Home Assistant speaks to every brand (米家 via Xiaomi Miot Auto, Google TV,
+…) and turns them into entities; OpenTeddy talks to one REST API with a
+long-lived access token (Settings → Home Assistant).
+
+    configured()                       URL + token set
+    status()                           HA reachable? version, entity count, 小愛
+    list_entities(query, domain)       compact device list for the model
+    get_state(entity_id)
+    control(entity_id, service, data)  with the safety policy below
+    assist(text)                       HA's own Assist: "關客廳燈" → done, no LLM
+    xiaoai(text, execute)              小愛音箱 says `text`, or runs it as a
+                                       spoken command (IR air-con, TV, …)
+    confirm(code)                      run a held sensitive action
+
+Safety. Locks, alarms, valves, sirens, water heaters and garage / gate /
+door covers (Settings → ha_confirm_domains) are never run directly: the
+call is held and a 4-digit code comes back. Only a new message from the
+person — "確認 1234" — runs it (orchestrator fast path), so the model can't
+confirm on its own and Telegram's auto-approval doesn't apply. Codes
+expire after 5 minutes and work once.
+"""
+from __future__ import annotations
+
+import logging
+import secrets
+import time
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+from config import config
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_CONFIRM_DOMAINS = "lock,alarm_control_panel,valve,siren,water_heater"
+_SENSITIVE_COVER_CLASSES = {"garage", "gate", "door"}
+_CONFIRM_TTL_S = 300
+_pending: Dict[str, Dict[str, Any]] = {}
+
+
+class HAError(Exception):
+    """A Home Assistant request that failed, with a message for the user."""
+
+
+def _url() -> str:
+    return (getattr(config, "ha_url", "") or "").strip().rstrip("/")
+
+
+def _token() -> str:
+    return (getattr(config, "ha_token", "") or "").strip()
+
+
+def configured() -> bool:
+    return bool(_url() and _token())
+
+
+async def _request(method: str, path: str, json: Any = None, timeout: float = 10.0) -> Any:
+    if not configured():
+        raise HAError("還沒連上 Home Assistant：請在 Settings → Home Assistant 填網址和存取權杖。")
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.request(method, _url() + path, json=json,
+                                     headers={"Authorization": f"Bearer {_token()}"})
+    except httpx.HTTPError as exc:
+        raise HAError(f"連不到 Home Assistant（{_url()}）：{type(exc).__name__}") from exc
+    if r.status_code == 401:
+        raise HAError("Home Assistant 拒絕了存取權杖，請重新產生一組貼到 Settings。")
+    if r.status_code >= 400:
+        raise HAError(f"Home Assistant 回應 {r.status_code}：{r.text[:200]}")
+    try:
+        return r.json()
+    except ValueError:
+        return r.text
+
+
+# ── Reading ──────────────────────────────────────────────────────────────────
+
+def _compact(s: Dict[str, Any]) -> Dict[str, Any]:
+    attrs = s.get("attributes") or {}
+    out = {"entity_id": s.get("entity_id"), "name": attrs.get("friendly_name") or s.get("entity_id"),
+           "state": s.get("state")}
+    for k in ("device_class", "unit_of_measurement", "current_temperature", "temperature",
+              "hvac_modes", "brightness", "volume_level", "source", "media_title"):
+        if k in attrs:
+            out[k] = attrs[k]
+    return out
+
+
+async def list_entities(query: Optional[str] = None, domain: Optional[str] = None,
+                        limit: int = 60) -> List[Dict[str, Any]]:
+    states = await _request("GET", "/api/states")
+    q = (query or "").strip().lower()
+    out = []
+    for s in states or []:
+        eid = s.get("entity_id", "")
+        if domain and not eid.startswith(domain.rstrip(".") + "."):
+            continue
+        if eid.split(".", 1)[0] in {"sun", "zone", "person", "update", "automation", "tts", "conversation", "event"}:
+            continue
+        c = _compact(s)
+        if q and q not in eid.lower() and q not in str(c["name"]).lower():
+            continue
+        out.append(c)
+    return out[:limit]
+
+
+async def get_state(entity_id: str) -> Dict[str, Any]:
+    s = await _request("GET", f"/api/states/{entity_id}")
+    return _compact(s) | {"attributes": (s or {}).get("attributes", {})}
+
+
+async def status() -> Dict[str, Any]:
+    if not configured():
+        return {"configured": False, "reachable": False}
+    cfg = await _request("GET", "/api/config")
+    states = await _request("GET", "/api/states")
+    domains: Dict[str, int] = {}
+    for s in states or []:
+        d = s.get("entity_id", "").split(".", 1)[0]
+        domains[d] = domains.get(d, 0) + 1
+    return {"configured": True, "reachable": True, "version": cfg.get("version"),
+            "location": cfg.get("location_name"), "language": cfg.get("language"),
+            "entities": len(states or []), "domains": domains,
+            "xiaoai": await _find_xiaoai(states)}
+
+
+# ── Acting ───────────────────────────────────────────────────────────────────
+
+def _confirm_domains() -> set:
+    raw = getattr(config, "ha_confirm_domains", None)
+    raw = DEFAULT_CONFIRM_DOMAINS if raw is None else raw
+    return {d.strip() for d in str(raw).split(",") if d.strip()}
+
+
+async def _needs_confirmation(entity_id: str) -> bool:
+    domain = entity_id.split(".", 1)[0]
+    if domain in _confirm_domains():
+        return True
+    if domain == "cover":
+        try:
+            st = await get_state(entity_id)
+            return st.get("attributes", {}).get("device_class") in _SENSITIVE_COVER_CLASSES
+        except HAError:
+            return True                    # unknown cover → be careful
+    return False
+
+
+async def control(entity_id: str, service: str, data: Optional[Dict[str, Any]] = None,
+                  confirmed: bool = False) -> Dict[str, Any]:
+    """Call <domain>.<service> on one entity. Sensitive entities come back
+    as {"needs_confirmation": code} unless `confirmed` (only confirm())."""
+    entity_id = (entity_id or "").strip()
+    if "." not in entity_id:
+        raise HAError(f"不是有效的設備 ID：{entity_id}")
+    domain = entity_id.split(".", 1)[0]
+    service = (service or "").strip().split(".")[-1]
+    if not service:
+        raise HAError("缺少動作，例如 turn_on / turn_off / set_temperature。")
+    if not confirmed and await _needs_confirmation(entity_id):
+        code = f"{secrets.randbelow(9000) + 1000}"
+        _pending[code] = {"entity_id": entity_id, "service": service, "data": data or {},
+                          "expires": time.monotonic() + _CONFIRM_TTL_S}
+        logger.info("Home: holding %s.%s on %s for confirmation", domain, service, entity_id)
+        return {"needs_confirmation": code, "entity_id": entity_id, "service": service,
+                "message": f"這是需要確認的設備。請使用者自己回覆「確認 {code}」才會執行，5 分鐘內有效。"}
+    body = {"entity_id": entity_id, **(data or {})}
+    changed = await _request("POST", f"/api/services/{domain}/{service}", json=body)
+    logger.info("Home: %s.%s on %s %s", domain, service, entity_id, data or "")
+    return {"done": True, "entity_id": entity_id, "service": f"{domain}.{service}",
+            "changed": [c.get("entity_id") for c in (changed or []) if isinstance(c, dict)]}
+
+
+async def confirm(code: str) -> Dict[str, Any]:
+    now = time.monotonic()
+    for k in [k for k, v in _pending.items() if v["expires"] < now]:
+        _pending.pop(k, None)
+    held = _pending.pop((code or "").strip(), None)
+    if not held:
+        raise HAError("這個確認碼不存在或已過期（5 分鐘），請重新下指令。")
+    return await control(held["entity_id"], held["service"], held["data"], confirmed=True)
+
+
+async def assist(text: str, language: Optional[str] = None) -> Dict[str, Any]:
+    """Home Assistant Assist (its own sentence matcher): {ok, kind, speech, targets}."""
+    lang = language or (getattr(config, "ha_language", "") or "").strip() or None
+    body: Dict[str, Any] = {"text": text}
+    if lang:
+        body["language"] = lang
+    res = await _request("POST", "/api/conversation/process", json=body)
+    r = (res or {}).get("response") or {}
+    kind = r.get("response_type") or "error"
+    speech = (((r.get("speech") or {}).get("plain") or {}).get("speech") or "").strip()
+    data = r.get("data") or {}
+    return {"ok": kind in ("action_done", "query_answer"), "kind": kind, "speech": speech,
+            "targets": [t.get("name") for t in data.get("success", []) if isinstance(t, dict)],
+            "failed": [t.get("name") for t in data.get("failed", []) if isinstance(t, dict)],
+            "code": data.get("code")}
+
+
+async def _find_xiaoai(states: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    configured_id = (getattr(config, "xiaoai_entity", "") or "").strip()
+    if configured_id:
+        return configured_id
+    if states is None:
+        states = await _request("GET", "/api/states")
+    for s in states or []:
+        eid = s.get("entity_id", "")
+        if eid.startswith("media_player.") and any(k in eid for k in ("lx06", "wifispeaker", "xiaoai")):
+            return eid
+    return None
+
+
+async def xiaoai(text: str, execute: bool = False) -> Dict[str, Any]:
+    """小愛音箱: say `text` aloud, or (execute=True) run it as if spoken —
+    "打開冷氣" reaches IR devices only 小愛 knows about."""
+    speaker = await _find_xiaoai()
+    if not speaker:
+        raise HAError("Home Assistant 裡找不到小愛音箱。請確認 Xiaomi Miot Auto 已登入、音箱已加入，"
+                      "或在 Settings 指定小愛音箱的 entity。")
+    try:
+        await _request("POST", "/api/services/xiaomi_miot/intelligent_speaker",
+                       json={"entity_id": speaker, "text": text, "execute": bool(execute), "silent": False})
+    except HAError as exc:
+        # Older integration versions expose text entities instead of the service.
+        suffix = "execute_text_directive" if execute else "play_text"
+        target = speaker.replace("media_player.", "text.") + f"_{suffix}"
+        try:
+            await _request("POST", "/api/services/text/set_value", json={"entity_id": target, "value": text})
+        except HAError:
+            raise exc
+    logger.info("Home: 小愛 %s %r", "command" if execute else "say", text)
+    return {"done": True, "speaker": speaker, "mode": "command" if execute else "say", "text": text}

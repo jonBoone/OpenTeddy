@@ -1196,6 +1196,7 @@ async def admin_diagnostics() -> Response:
 
     SECRET_KEYS = {
         "anthropic_api_key", "telegram_bot_token", "smtp_password", "webhook_secret",
+        "ha_token",
     }
 
     def _redact(value: str) -> str:
@@ -3523,6 +3524,17 @@ async def list_printers_endpoint() -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.info("printer status for %s failed: %s", default, exc)
     return {"success": True, "printers": printers, "default": default, "status": status, "error": None}
+
+
+@app.get("/home/status")
+async def home_status_endpoint() -> dict:
+    """Home Assistant connection check for Settings → Home Assistant:
+    reachable, version, how many devices, which speaker is 小愛."""
+    import home_assistant as HA
+    try:
+        return {"success": True, **(await HA.status()), "error": None}
+    except HA.HAError as exc:
+        return {"success": False, "configured": HA.configured(), "reachable": False, "error": str(exc)}
 
 
 @app.post("/settings")
