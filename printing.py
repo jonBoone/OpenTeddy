@@ -152,9 +152,15 @@ def printer_uri(name: str) -> Optional[str]:
     try:
         r = _run(["lpstat", "-v", name])
         m = re.search(r"device for \S+:\s*(\S+)", r.stdout)
-        if m and m.group(1).startswith(("ipp://", "ipps://")):
-            uri = m.group(1)
+        device = m.group(1) if m else ""
+        if device.startswith(("ipp://", "ipps://")):
+            uri = device
         want = _norm(name)
+        if device.startswith("dnssd://"):
+            # dnssd://Brother%20HL-L3270CDW%20series._ipp._tcp.local/?uuid=…
+            # names the network service, which is what discovery lists.
+            from urllib.parse import unquote
+            want = _norm(unquote(device[len("dnssd://"):].split("._", 1)[0]))
         if not uri and shutil.which("avahi-browse"):
             r = subprocess.run(["avahi-browse", "-rtp", "_ipp._tcp"], capture_output=True,
                                text=True, timeout=6, env=_env())
@@ -207,6 +213,7 @@ def printer_status(name: Optional[str] = None) -> Dict[str, Any]:
             continue
     reasons = [x for x in attrs.get("printer-state-reasons", "none").split(",") if x and x != "none"]
     return {
+        "reachable": bool(attrs),
         "name": name,
         "model": attrs.get("printer-make-and-model", "") or display_name(name),
         "state": attrs.get("printer-state", "unknown"),
@@ -234,6 +241,9 @@ _REASONS = {
 def status_warnings(status: Dict[str, Any], zh: bool = True) -> List[str]:
     """Plain-language warnings worth telling the person who just printed."""
     out: List[str] = []
+    if status.get("reachable") is False:
+        out.append("現在連不到印表機，它開機或醒來後會自動印出" if zh
+                   else "the printer can't be reached right now; it will print when it wakes up")
     for r in status.get("reasons", []):
         base = re.sub(r"-(warning|error|report)$", "", r)
         if base in _REASONS:

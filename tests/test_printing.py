@@ -30,7 +30,7 @@ case "$1" in
   -e) echo Brother_HL_L3270CDW_series ;;
   -p) echo "printer Brother_HL_L3270CDW_series is idle.  enabled since Sat Oct 10" ;;
   -d) echo "no system default destination" ;;
-  -v) echo "device for $2: implicitclass://$2/" ;;
+  -v) if [ "$2" = "Brother_HL_L3270CDW" ]; then echo "device for $2: dnssd://Brother%20HL-L3270CDW%20series._ipp._tcp.local/?uuid=e324"; else echo "device for $2: implicitclass://$2/"; fi ;;
 esac''',
     "lp": r'''
 python3 - "$@" <<'EOF'
@@ -136,6 +136,7 @@ def test_printing() -> None:
     print("  ✓ printers listed; default = Settings, else CUPS default, else the only printer")
 
     assert printing.printer_uri("Brother_HL_L3270CDW_series") == "ipp://192.168.50.160:631/ipp/print"
+    assert printing.printer_uri("Brother_HL_L3270CDW") == "ipp://192.168.50.160:631/ipp/print", "dnssd queue"
     st = printing.printer_status()
     assert st["model"] == "Brother HL-L3270CDW series" and st["reasons"] == ["toner-low-warning"]
     assert st["markers"][0] == {"name": "BK", "level": 10, "low": 10}
@@ -143,6 +144,8 @@ def test_printing() -> None:
     assert printing.status_warnings(st, zh=False) == ["black toner at 10%, nearly empty"]
     st2 = {"reasons": ["media-empty-error", "media-jam"], "markers": [{"name": "C", "level": 90, "low": 10}]}
     assert printing.status_warnings(st2) == ["紙匣沒紙了", "卡紙"]
+    assert printing.status_warnings({"reachable": False}) == ["現在連不到印表機，它開機或醒來後會自動印出"]
+    assert st["reachable"] is True
     print("  ✓ printer found on the network (IPv4 preferred); toner / paper warnings in plain words")
 
     pdf = os.path.join(WS, "uploads", "考卷 v2.pdf")
