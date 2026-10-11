@@ -1131,7 +1131,7 @@ async def _dispatch(update: Dict[str, Any]) -> None:
             await _send_reply(
                 chat_id,
                 f"📎 已收到 {info['name']}（{_fmt_size(info['size_bytes'])}）。"
-                f"要我怎麼處理？例如「幫我總結重點」。",
+                f"要我怎麼處理？例如「幫我總結重點」或「列印」。",
             )
             return
 

@@ -412,6 +412,17 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "description": "Bot token from @BotFather. Used by the telegram_send tool.",
         "type":        "secret",  # UI masks the value
     },
+    "printer_name": {
+        "label":       "Default printer",
+        "description": "Printer for print_file and \"我要列印\". Empty = the system "
+                       "default, or the only printer this machine sees.",
+        "type":        "text",
+    },
+    "print_max_copies": {
+        "label":       "Max copies per print",
+        "description": "Upper limit on copies in one print request.",
+        "type":        "int",
+    },
     "telegram_default_chat_id": {
         "label":       "Telegram Default Chat ID",
         "description": "Optional. When set, telegram_send can omit chat_id "
@@ -525,6 +536,8 @@ def _defaults_from_config() -> dict[str, str]:
         "qwen_temperature":          str(config.qwen_temperature),
         "telegram_bot_token":        str(config.telegram_bot_token),
         "telegram_default_chat_id":  str(config.telegram_default_chat_id),
+        "printer_name":              str(getattr(config, "printer_name", "")),
+        "print_max_copies":          str(getattr(config, "print_max_copies", 20)),
         "telegram_inbound_enabled":  "true" if getattr(config, "telegram_inbound_enabled", False) else "false",
         "telegram_inbound_chat_id_whitelist": str(getattr(config, "telegram_inbound_chat_id_whitelist", "")),
         "smtp_host":                 str(config.smtp_host),
@@ -894,6 +907,12 @@ class SettingsStore:
         vqt = _float("qwen_temperature")
         if vqt is not None:
             config.qwen_temperature = vqt
+
+        if "printer_name" in settings:
+            config.printer_name = (settings["printer_name"] or "").strip()
+        vpc = _int("print_max_copies")
+        if vpc is not None:
+            config.print_max_copies = max(1, min(200, vpc))
 
         if "agent_workspace_dir" in settings and settings["agent_workspace_dir"]:
             # Resolve to absolute once here — see config.py for the rationale.

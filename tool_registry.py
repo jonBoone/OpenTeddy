@@ -521,6 +521,10 @@ class ToolRegistry:
         # in one call, so overall status can be asked once instead of
         # opening each reporting session in turn.
         from tools.digest_tool import DIGEST_TOOLS
+        # Printing (CUPS): print_file / printer_status. "我要列印" with an
+        # upload is handled before planning (print_intent.py); these cover
+        # printing as one step of a bigger job.
+        from tools.print_tool import PRINT_TOOLS
 
         for fn, schema, risk in (
             SHELL_TOOLS + FILE_TOOLS + HTTP_TOOLS
@@ -529,6 +533,7 @@ class ToolRegistry:
             + SEARCH_TOOLS + BROWSER_TOOLS + MARKITDOWN_TOOLS
             + CYBER_SKILLS_TOOLS + GITHUB_TRENDING_TOOLS
             + CHROME_ATTACHED_TOOLS + THREADS_TOOLS + DIGEST_TOOLS
+            + PRINT_TOOLS
         ):
             self.register(fn, schema, risk)
 

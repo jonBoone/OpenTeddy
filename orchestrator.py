@@ -959,6 +959,19 @@ class Orchestrator:
         # status" — so an event stream knows when to close.
         await self._emit_task_event("task.started", req, status="running")
 
+        # ── 0. Direct print: an upload + "我要列印" → printer, no model ──
+        # A message that only asks to print (print_intent.py) is done in
+        # about a second instead of a planning round. Scheduled runs never
+        # print on their own.
+        if (req.context or {}).get("triggered_by") != "schedule":
+            try:
+                from print_intent import parse_print_command
+                _print_cmd = parse_print_command(req.goal)
+            except Exception:  # noqa: BLE001
+                _print_cmd = None
+            if _print_cmd is not None:
+                return await self._direct_print(req, _print_cmd)
+
         # ── 0a. Chat-mode short-circuit (highest-priority fast path) ──
         # When the user has explicitly picked Chat mode for the session,
         # we already know this isn't going to involve tools — skip the
@@ -1292,6 +1305,105 @@ class Orchestrator:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    async def _recent_uploads(self, req: TaskRequest, within_s: float = 7200) -> List[str]:
+        """Attachment paths of the latest earlier message in this session
+        that had any, if it was within `within_s` — "我要列印" sent after
+        the file was already used for something else."""
+        if not req.session_id:
+            return []
+        try:
+            from print_intent import split_manifest
+            from datetime import datetime, timezone
+            rows = await self.tracker.list_tasks(limit=8, session_id=req.session_id)
+        except Exception:  # noqa: BLE001
+            return []
+        for r in rows:
+            if r.get("id") == req.id:
+                continue
+            paths, _ = split_manifest(r.get("goal") or "")
+            if not paths:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(r.get("created_at")).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - ts).total_seconds() > within_s:
+                    return []
+            except Exception:  # noqa: BLE001
+                pass
+            return paths
+        return []
+
+    async def _direct_print(self, req: TaskRequest, cmd: Any) -> TaskResult:
+        """Print the attached files (or the session's latest upload) and
+        report job ids plus printer warnings such as low toner."""
+        import printing
+        zh = printing.is_zh(cmd.text) or not cmd.text
+        files = list(cmd.attachments)
+        reused = False
+        if not files and cmd.explicit:
+            files = await self._recent_uploads(req)
+            reused = bool(files)
+        lines: List[str] = []
+        ok = False
+        if not files:
+            lines.append("請先上傳要列印的檔案，再說「列印」。" if zh
+                         else "Upload the file you want printed first, then say \"print\".")
+        else:
+            printer: Optional[str] = None
+            try:
+                printer = await asyncio.to_thread(printing.default_printer)
+            except printing.PrintError as exc:
+                lines.append(f"❌ {exc}")
+            if printer:
+                status_task = asyncio.create_task(asyncio.wait_for(
+                    asyncio.to_thread(printing.printer_status, printer), 8))
+                extra = cmd.options.describe(zh)
+                for f in files:
+                    name = os.path.basename(f)
+                    try:
+                        job = await asyncio.to_thread(printing.print_file, f, printer, cmd.options)
+                        ok = True
+                        num = job["job_id"].rsplit("-", 1)[-1] if job["job_id"] else ""
+                        pages = f"{job['pages']} 頁" if (zh and job.get("pages")) else (
+                            f"{job['pages']} pages" if job.get("pages") else "")
+                        detail = "，".join(x for x in (pages, extra) if x) if zh else ", ".join(x for x in (pages, extra) if x)
+                        if zh:
+                            lines.append(f"🖨️ 已送出列印：{name}" + (f"（{detail}）" if detail else "")
+                                         + (f"，工作編號 {num}" if num else ""))
+                        else:
+                            lines.append(f"🖨️ Sent to the printer: {name}" + (f" ({detail})" if detail else "")
+                                         + (f", job {num}" if num else ""))
+                    except printing.PrintError as exc:
+                        lines.append(f"❌ {name}：{exc}" if zh else f"❌ {name}: {exc}")
+                    except Exception as exc:  # noqa: BLE001
+                        lines.append(f"❌ {name}：{type(exc).__name__}: {exc}")
+                try:
+                    st = await status_task
+                    model = st.get("model") or printing.display_name(printer)
+                    lines.insert(0, f"印表機：{model}" if zh else f"Printer: {model}")
+                    for w in printing.status_warnings(st, zh=zh):
+                        lines.append(f"⚠️ {w}")
+                except Exception:  # noqa: BLE001
+                    lines.insert(0, f"印表機：{printing.display_name(printer)}" if zh
+                                 else f"Printer: {printing.display_name(printer)}")
+                if reused:
+                    lines.append("（這次沒有附檔，印的是這個對話最近上傳的檔案。）" if zh
+                                 else "(No file attached, so I printed the latest upload in this chat.)")
+        summary = "\n".join(lines)
+        status = TaskStatus.COMPLETED if (ok or not files) else TaskStatus.FAILED
+        st_rec = SubTask(parent_task_id=req.id, description=req.goal, agent=AgentRole.EXECUTOR,
+                         order=0, status=status, result=summary, confidence=1.0 if ok else 0.0)
+        try:
+            await self.tracker.create_subtask(st_rec)
+            await self.tracker.update_subtask(st_rec)
+            await self.tracker.update_task_status(req.id, status, summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Direct print tracker write failed: %s", exc)
+        logger.info("Direct print for task %s: %s", req.id, summary.replace("\n", " | "))
+        return TaskResult(task_id=req.id, status=status, summary=summary, subtasks=[st_rec],
+                          skills_used=[], new_skills_created=[])
+
     async def _recent_turns_block(self, req: TaskRequest, max_turns: int = 4,
                                   max_chars: int = 2400) -> str:
         """The last few exchanges of THIS session, oldest first.
@@ -1316,11 +1428,10 @@ class Orchestrator:
             return ""
         blocks: List[str] = []
         for r in reversed(turns):                 # oldest first
-            goal = (r.get("goal") or "").strip()
-            m = re.match(r"^\[Attachments in workspace[^\]]*\]\s*", goal)
-            if m:                                   # keep the paths: "that file" must stay findable
-                paths = re.findall(r"^\s*-\s*(\S+)", m.group(0), re.M)
-                goal = f"[附件: {', '.join(paths)}] " + goal[m.end():]
+            from print_intent import split_manifest
+            paths, goal = split_manifest(r.get("goal") or "")
+            if paths:                               # keep the paths: "that file" must stay findable
+                goal = f"[附件: {', '.join(paths)}] " + goal
             summ = re.sub(r"\s+", " ", (r.get("summary") or "").strip())
             blocks.append(f"使用者：{goal[:300]}\n助理：{summ[:500]}")
         text = "\n\n".join(blocks)

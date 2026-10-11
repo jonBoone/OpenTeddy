@@ -4948,6 +4948,31 @@
               </div>
             </div>
 
+            <!-- Printer — "upload + 列印" and the print_file tool use the
+                 default printer here (CUPS on this machine). -->
+            <div class="settings-section collapsed">
+              <h3 onclick="toggleSettingsSection(this)" data-i18n="printer_heading">🖨️ Printer</h3>
+              <div class="settings-section-body">
+              <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.9rem;line-height:1.5" data-i18n="printer_desc">
+                Upload a file and say "print" (chat or Telegram) and it goes straight to this printer.
+              </div>
+              <div class="row" style="margin-bottom:0.85rem">
+                <div class="field" style="flex:2">
+                  <label data-i18n="printer_label">Default printer</label>
+                  <select id="inp_printer_name"><option value="" data-i18n="printer_auto">Automatic</option></select>
+                </div>
+                <div class="field">
+                  <label data-i18n="printer_max_copies_label">Max copies per print</label>
+                  <input type="number" id="inp_print_max_copies" min="1" max="200" value="20" />
+                </div>
+              </div>
+              <div id="printerStatus" style="font-size:0.76rem;color:var(--text-secondary);line-height:1.6;margin-bottom:0.6rem"></div>
+              <button type="button" class="mem-btn" onclick="refreshPrinters()" style="font-size:0.78rem">
+                <span>🔄</span><span data-i18n="printer_refresh">Refresh</span>
+              </button>
+              </div>
+            </div>
+
             <!-- Danger zone — destructive operations on local state.
                  Lives at the very bottom of the Settings tab below
                  the regular form so users have to actively scroll
@@ -10173,6 +10198,9 @@
         _setInput('inp_agent_workspace_dir', s.agent_workspace_dir?.value ?? './agent-workspace');
         _setInput('inp_telegram_bot_token',       s.telegram_bot_token?.value       ?? '');
         _setInput('inp_telegram_default_chat_id', s.telegram_default_chat_id?.value ?? '');
+        _printerSaved = s.printer_name?.value ?? '';
+        _setInput('inp_print_max_copies', s.print_max_copies?.value || '20');
+        refreshPrinters();
         // Inbound bridge — checkbox + whitelist textbox. The server
         // serialises the bool as the string "true" / "false" so it
         // round-trips through the same key-value Settings store as
@@ -10220,6 +10248,52 @@
     }
 
     function _setInput(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
+
+    // ── Settings → Printer ─────────────────────────────────────────────
+    // Fills the default-printer list from GET /printers (CUPS on the
+    // runtime's machine) and shows the default printer's state + toner.
+    let _printerSaved = '';
+    async function refreshPrinters() {
+      const sel = document.getElementById('inp_printer_name');
+      const box = document.getElementById('printerStatus');
+      if (!sel || !box) return;
+      box.textContent = t('printer_loading');
+      try {
+        const r = await fetch(`${API}/printers`).then(res => res.json());
+        const printers = r.printers || [];
+        const pretty = n => String(n || '').replace(/_/g, ' ');
+        sel.innerHTML = '';
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = t('printer_auto') + (r.default && !_printerSaved ? ` — ${pretty(r.default)}` : '');
+        sel.appendChild(auto);
+        printers.forEach(p => {
+          const o = document.createElement('option');
+          o.value = p.name; o.textContent = pretty(p.name);
+          sel.appendChild(o);
+        });
+        if (_printerSaved && !printers.some(p => p.name === _printerSaved)) {
+          const o = document.createElement('option');
+          o.value = _printerSaved; o.textContent = `${pretty(_printerSaved)} (?)`;
+          sel.appendChild(o);
+        }
+        sel.value = _printerSaved;
+        const lines = [];
+        if (r.error) lines.push('⚠️ ' + r.error);
+        const st = r.status;
+        if (st) {
+          lines.push(`${st.model || pretty(st.name)} · ${st.state}`);
+          if ((st.markers || []).length)
+            lines.push(st.markers.map(m => `${m.name} ${m.level}%`).join(' · '));
+          (st.warnings || []).forEach(w => lines.push('⚠️ ' + w));
+        } else if (!r.error && !printers.length) {
+          lines.push(t('printer_none'));
+        }
+        box.innerHTML = lines.map(escHtml).join('<br>');
+      } catch (e) {
+        box.textContent = '⚠️ ' + e;
+      }
+    }
 
     // Toggle the 3-way LLM mode radio cards. Updates both the radio
     // input (so the form-serialise picks it up) and the .selected CSS
@@ -11056,6 +11130,8 @@
         smtp_password:            document.getElementById('inp_smtp_password').value,
         smtp_from:                document.getElementById('inp_smtp_from').value.trim(),
         webhook_secret:           document.getElementById('inp_webhook_secret').value,
+        printer_name:             document.getElementById('inp_printer_name')?.value ?? '',
+        print_max_copies:         document.getElementById('inp_print_max_copies')?.value || '20',
       };
       // Most settings shouldn't be overwritten with a blank on save
       // (e.g. you don't want the Ollama model dropdown going empty
@@ -11067,7 +11143,7 @@
         'telegram_bot_token', 'telegram_default_chat_id',
         'telegram_inbound_chat_id_whitelist',
         'smtp_host', 'smtp_user', 'smtp_password', 'smtp_from',
-        'webhook_secret',
+        'webhook_secret', 'printer_name',
       ]);
       Object.keys(payload).forEach(k => {
         if (payload[k] === '' && !ALLOW_EMPTY.has(k)) delete payload[k];

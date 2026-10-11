@@ -445,6 +445,12 @@ class Config:
     telegram_default_chat_id: str = field(
         default_factory=lambda: os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "")
     )
+    # Printing (printing.py). Empty printer_name = the CUPS default, or the
+    # only printer there is. print_max_copies caps one job.
+    printer_name: str = field(default_factory=lambda: os.getenv("PRINTER_NAME", ""))
+    print_max_copies: int = field(
+        default_factory=lambda: int(os.getenv("PRINT_MAX_COPIES", "20") or 20)
+    )
     # Inbound (Telegram → OpenTeddy) — long-polling bridge.
     # When `telegram_inbound_enabled` is True AND `telegram_bot_token`
     # is set AND `telegram_inbound_chat_id_whitelist` is non-empty,
@@ -954,6 +960,11 @@ class Config:
             self.session_workspace_isolation = (
                 str(settings["session_workspace_isolation"]).strip().lower() not in _OFF
             )
+
+        if "printer_name" in settings:
+            self.printer_name = (settings["printer_name"] or "").strip()
+        if (settings.get("print_max_copies") or "").strip().isdigit():
+            self.print_max_copies = max(1, min(200, int(settings["print_max_copies"])))
 
         # Notification credentials — strings only (port parsed as int).
         for k in ("telegram_bot_token", "telegram_default_chat_id",

@@ -3503,6 +3503,28 @@ async def fleet_dispatch(body: dict) -> dict:
                 "error": str(exc)}
 
 
+@app.get("/printers")
+async def list_printers_endpoint() -> dict:
+    """Printers this machine can print to, the default, and its status
+    (state, toner, warnings) — for Settings → Printer."""
+    import printing
+    try:
+        printers = await asyncio.to_thread(printing.list_printers)
+    except printing.PrintError as exc:
+        return {"success": False, "printers": [], "default": "", "status": None, "error": str(exc)}
+    try:
+        default = await asyncio.to_thread(printing.default_printer)
+    except printing.PrintError as exc:
+        return {"success": True, "printers": printers, "default": "", "status": None, "error": str(exc)}
+    status = None
+    try:
+        status = await asyncio.wait_for(asyncio.to_thread(printing.printer_status, default), 10)
+        status["warnings"] = printing.status_warnings(status, zh=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("printer status for %s failed: %s", default, exc)
+    return {"success": True, "printers": printers, "default": default, "status": status, "error": None}
+
+
 @app.post("/settings")
 async def update_settings(body: dict) -> dict:
     """Persist new setting values and hot-reload config — no restart needed."""
