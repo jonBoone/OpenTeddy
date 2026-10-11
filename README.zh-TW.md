@@ -111,7 +111,9 @@ cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://lo
 - **技能會自己長出來** — 透過 ChromaDB embedding 偵測重複的 goal pattern（不依賴小模型自我反思），當過去有 N 個語意相近的 goal 達標時自動合成技能名稱+描述，交給 Claude 寫成 Python 函式。可在 Settings 調整門檻（預設 3 次重複、相似度 0.75）。
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
-- **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，看到「⚙️ Subtask 3/5 · 🎯 0.85 · 💰 $0.043」**就地編輯的即時進度**，跑完拿到 summary 跟 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
+- **上傳就能列印** — 在對話或 Telegram 上傳檔案，說「列印」或「印 2 份 雙面」，大約一秒就送到印表機（透過 CUPS），回覆附工作編號和碳粉不足之類的提醒。Word / Excel / PowerPoint 會先用 LibreOffice 轉成 PDF；「整理成題庫再印出來」這種要先做事的，由 agent 做完再呼叫列印工具。詳見 [列印](#列印)。
+- **透過 Home Assistant 控制家裡的設備** — 「關客廳燈」、「冷氣開 26 度」、「家裡有哪些設備離線」大約一秒由 Home Assistant 完成；它能接米家、Google TV 和兩千多種品牌。小愛音箱可以播報，也能代你下語音指令控制紅外線家電。門鎖、保全、車庫門會等你回覆「確認 代碼」才動作。詳見 [智慧家庭](#智慧家庭home-assistant)。
+- **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，也可以傳文件或照片（存進 session 的 `uploads/`，給下一句話用）；處理時會出現一個小小的「Thinking」動畫，回答會排版成正常的文字而不是一堆 `###`、`**` 符號，另外附上 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。每則訊息都看得到最近幾輪對話。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
 - **手機友善的 Web UI 透過 Tailscale** — `./run.sh --host 0.0.0.0` + 自家 tailnet 就讓 dashboard 在手機瀏覽器上能用。Sessions / chat / artifact 預覽都 responsive；手機寬度時 session header 會自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。不用 port forward、不用 nginx、不用公網 DNS — 手機裝 Tailscale app 直接連 `http://<你的機器名>:8000`。
 - **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、可自由拖動的視窗、自動更新、診斷下載。詳見 [`desktop/`](desktop/)。
 - **可選的雲端帳號** — 用 Google 登入即可跨裝置同步技能、記憶、設定。匿名 Firebase Auth 每個 install 從第一次開機就有；登入是 opt-in。OSS web UI 完全不含 Firebase code，雲端只在 desktop 殼裡跑。
@@ -319,15 +321,18 @@ ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
 | 你發 | 會怎樣 |
 |---|---|
 | 任何文字 | 當 goal 跑，在這個 chat 綁的 session 裡，跑完推結果回來 |
+| 文件或照片 | 存進 session 的 `uploads/`，附在下一則訊息（或照片說明）上，例如接著說「幫我總結」或「列印」 |
+| 傳檔後說「列印」、「印 2 份 雙面」 | 直接列印，見 [列印](#列印) |
+| 「關客廳燈」、「家裡有哪些設備離線」 | 由 Home Assistant 回答，見 [智慧家庭](#智慧家庭home-assistant) |
+| 「確認 1234」 | 執行先前被暫停、等你確認的門鎖 / 保全 / 車庫門動作 |
 | `/start` | 確認連線 |
 | `/help` | 命令列表 |
 | `/cancel` | 中止當下正在跑的 task |
 | `/new` | 換新 session（舊的保留在歷史） |
 
-Agent 回覆包含：
+處理超過 2 秒時會出現一個循環播放的「Thinking」小貼圖，答案送出前自動刪除。Agent 回覆包含：
 
-- **狀態行** — `✅ Completed · 12.4s · 3 subtasks`
-- **summary 文字** — orchestrator 寫的最終 summary，截斷到 ~3500 字元
+- **答案在最前面** — Markdown 會轉成 Telegram 的格式（粗體、清單、連結、程式碼；標題變粗體、表格變條列），太長會自動分成多則，最後一行是淡淡的「✅ 完成 · 11.7 秒」
 - **`📎 Files produced`** — 每個 artifact 的檔名 + 大小 + 是哪個工具產的（包含 shell redirect 寫出來的檔，已被後台 workspace scanner 抓到）
 - **內容 inline** — 小於 3 KB 的文字檔直接當下一則訊息丟過來；大檔 / 二進位走 Telegram `sendDocument` 變成「附件 card」，你 tap 就下載
 
@@ -345,6 +350,83 @@ curl -s http://<server>:8000/admin/telegram/status | jq
 ```
 
 回 bridge 當下的狀態 — `running`、`inbound_enabled`、`token_set`、白名單實際內容、**最近一次被沈默丟掉的 chat_id**（這個是「為什麼我發訊息沒回」的最快答案），以及哪些 chat 正在跑 task。Token 不會回傳，只回一個 bool flag 表示有沒有設。
+
+## 列印
+
+在對話視窗或 Telegram 上傳檔案，說要列印就好。單純的列印要求不經過規劃模型：附檔直接交給 CUPS（`lp`），大約一秒就回覆。
+
+| 你說 | 會怎樣 |
+|---|---|
+| 「我要列印」、「print this」 | 印出這則訊息附的檔案 |
+| 「幫我印 2 份 雙面」、「印第 1 到 3 頁 黑白」 | 份數、雙面 / 單面、黑白、頁數範圍 |
+| 沒附檔直接說「列印」 | 印這個對話兩小時內最近上傳的檔案 |
+| 「把題庫整理好再印出來」 | 不是單純列印：agent 先做事，再呼叫 `print_file` 工具 |
+| 「碳粉還有嗎」 | 問印表機狀態，不會列印：agent 可以呼叫 `printer_status` |
+
+```
+印表機：Brother HL-L3270CDW series
+🖨️ 已送出列印：考卷.pdf（3 頁，2 份，雙面），工作編號 42
+⚠️ 黑色碳粉剩 10%，快用完了
+```
+
+**支援的格式：** PDF、圖片（自動縮放到一頁）、文字、Markdown、CSV 直接印；Word、Excel、PowerPoint、RTF、HTML 先用 LibreOffice（`soffice`）轉成 PDF。
+
+**用哪台印表機：** Settings → 🖨️ 印表機 → 預設印表機。留空就用 CUPS 的預設，或這台機器唯一的印表機。同一個區塊會顯示印表機狀態和碳粉存量，這是 OpenTeddy 直接透過 IPP（`ipptool`）問印表機的。`GET /printers` 也會回傳一樣的資訊。
+
+**建立永久佇列：** Linux 上的網路印表機通常是自動出現的「暫時佇列」，印表機關機時會消失，這時送出的列印就會失敗。改用永久佇列的話，工作會排隊，印表機開機或醒來後自動印出：
+
+```bash
+lpinfo --include-schemes dnssd -v          # 找到印表機的 dnssd:// 位址
+lpadmin -p Office_Printer -E -v 'dnssd://…' -m everywhere -o printer-error-policy=retry-job
+```
+
+再到 Settings → 印表機選它。帳號在 `lpadmin` 群組的話不需要 sudo。
+
+**保護措施：** 只能列印 session 工作區裡的檔案，agent 沒辦法把機器上任意的檔案印出來。份數有上限（Settings →「每次最多份數」，預設 20），一次最多 500 頁。排程任務不會自己列印。
+
+## 智慧家庭（Home Assistant）
+
+OpenTeddy 不直接接各個品牌，而是交給 [Home Assistant](https://www.home-assistant.io/)：它負責米家、Google TV / Chromecast、Philips Hue、Tuya 等兩千多種整合，OpenTeddy 只用一組存取權杖跟 Home Assistant 溝通。OpenTeddy 停機時，Home Assistant 的 App 和自動化照樣能用。
+
+```
+Telegram / 對話 / 排程 ──▶ OpenTeddy ──▶ Home Assistant ──▶ 米家 · 小愛音箱 · 電視 · …
+```
+
+### 設定步驟
+
+1. **安裝 Home Assistant**，裝在跑 OpenTeddy 的同一台（Docker；`--network host` 才找得到區網裡的設備）：
+
+   ```bash
+   docker run -d --name homeassistant --restart unless-stopped --network host \
+     -e TZ=Asia/Taipei -v ~/homeassistant:/config ghcr.io/home-assistant/home-assistant:stable
+   ```
+
+   打開 `http://<機器>:8123`，建立管理員帳號。
+2. **加入你的品牌**：Home Assistant 的「設定 → 裝置與服務」。米家請用 [Xiaomi Miot Auto](https://github.com/al-one/hass-xiaomi-miot)（把 `custom_components/xiaomi_miot` 放進 `~/homeassistant/custom_components/` 再重啟）。它支援 `cn`、`tw`、`sg`、`us`、`de`、`ru`、`i2` 伺服器，也能同時登入多個帳號：設備分在台灣和中國兩個帳號的話，每個地區各加一次。連線模式請選**雲端**：本機模式會讓大部分大陸設備（包括小愛音箱）顯示無法使用。小米官方的 Xiaomi Home 整合沒有列出台灣。
+3. **把設備名稱改成你平常說的**（客廳燈、臥室冷氣），或加別名。短指令是靠名稱找設備的。
+4. **建立長期存取權杖**（個人資料 → 安全性），貼到 OpenTeddy 的 Settings → 🏠 Home Assistant，儲存後按「測試連線」。會顯示版本、設備數量，以及哪一台是小愛音箱。`GET /home/status` 也會回傳一樣的資訊。
+
+### 可以怎麼說
+
+| 你說 | 路徑 | 會怎樣 |
+|---|---|---|
+| 「關客廳燈」、「冷氣開 26 度」、「電視音量調小」 | 直接，約 1 秒 | 交給 Home Assistant 的 Assist 執行；它聽不懂時改由 agent 用 `home_*` 工具處理 |
+| 「家裡有哪些設備離線」、「有設備斷線嗎」 | 直接，不到 0.1 秒 | 列出離線設備，一台設備一行，附房間和離線多久 |
+| 「家裡有哪些設備」 | 直接 | 按房間列出所有設備和在線狀態 |
+| 「叫小愛說晚餐好了」 | agent | 小愛音箱把這句話唸出來（`xiaoai`，模式 `say`） |
+| 「叫小愛打開冷氣」 | agent | 像你親口對小愛說一樣（模式 `command`），可以控制只有小愛能控制的紅外線家電 |
+| 「我出門了，把該關的都關掉」 | agent | `home_overview` / `home_devices` 找設備，再逐一 `home_control` |
+| 「每天早上 9 點檢查有沒有設備離線，有才通知我」 | 排程 | 每天檢查，有設備離線才傳 Telegram |
+| 「確認 1234」 | 直接 | 執行先前被暫停、等你確認的動作 |
+
+「離線」的判斷：一台設備的所有項目都沒有實際狀態，而且至少一項無法使用才算。按鈕類的項目永遠是 `unknown`，雲端整合也會讓正常設備的個別功能顯示無法使用，這些都不算離線。
+
+### 安全
+
+- **確認碼：** 門鎖、保全、水閥、警報器、熱水器，以及車庫門、閘門、門這類捲簾，永遠不會直接執行。動作會先暫停，回傳一組四位數代碼；只有**你自己傳一則新訊息**「確認 1234」才會執行，5 分鐘內有效、只能用一次。模型不能自己確認，Telegram 的自動核准也不適用，排程同樣不能確認。名單在 Settings →「需要確認的設備類型」。
+- **敏感字詞不走快速指令**（鎖、保全、瓦斯、車庫、lock、alarm、garage…），多步驟的要求也不走。
+- **Home Assistant 自己的公開設定仍然有效：** Assist 只會操作「設定 → 語音助理 → 公開」裡的設備，門鎖預設不公開。不想被語音控制的設備，請在那裡確認。
+- 權杖以密碼欄位儲存，匯出診斷資料時會遮蔽。
 
 ## Fleet — 分散式「AI 大腦群」（可選）
 

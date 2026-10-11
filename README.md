@@ -132,6 +132,8 @@ Claude Pro auto-renewing.
 - **A Runtime, not just an app** — every door (web UI, `openteddy` CLI, Telegram, schedules, `POST /tasks` from any program) goes through one launcher into the same kernel. Tasks are accepted immediately, stream their progress as SSE (`/tasks/{id}/events`), and can be approved, followed or cancelled from anywhere. Install it as an always-on service (`openteddy service install`) and upgrade with `openteddy update`. See [Task API](#task-api-headless-runtime).
 - **Agents with a real permission boundary** — a reusable role = persona + bound database + API credentials + allowed domains + API docs + **tool scope** (`allowed_tools`). Credentials never enter a prompt (the model writes `{{CRED:name}}`, the server substitutes only for allow-listed hosts); a scoped agent's executor sees only its tools and the registry refuses the rest, so a prompt injection has no shell/python to route around the allowlist. Unattended runs are permitted only inside a scope. See [Agents](#agents--reusable-roles-with-bound-databases) and [Security model](#security-model).
 - **Ask once, see everything** — schedules bound to sessions run on cron (or just say "每天早上 8 點…" in any door); `read_schedule_digest` gives the latest result of every scheduled job across all sessions, problems first, so "how are things today?" is one question. See [Schedules & the morning digest](#schedules--the-morning-digest).
+- **Print from any door** — upload a file and say *"列印"* / *"print 2 copies, double-sided"* in chat or Telegram and it is on the printer about a second later, through CUPS, with the job number and printer warnings such as low toner. Word / Excel / PowerPoint are converted with LibreOffice first; printing as one step of a bigger job ("整理成題庫再印出來") is a tool call. See [Printing](#printing).
+- **Control your home through Home Assistant** — *"關客廳燈"*, *"冷氣開 26 度"*, *"家裡有哪些設備離線"* are answered in about a second by Home Assistant, which speaks to 米家 / Xiaomi, Google TV and 2,000+ other integrations; the 小愛音箱 can speak announcements or run spoken commands for infrared devices. Locks, alarms and garage doors wait for you to reply *"確認 <code>"*. See [Smart home](#smart-home-home-assistant).
 - **Deadlines that follow the work** — time spent waiting for a human approval, and time a tool declared up front (`http_post timeout=2700` for a 31-minute video render), extend the subtask deadline instead of being billed against it. A stuck agent is still caught in minutes; a slow-but-progressing one isn't killed.
 - **Voice fast path** *(experimental)* — `POST /voice/ask` routes a spoken question to the cheapest lane that can answer it: templates (0 ms), a small model over the digest (~0.5 s), or a background task with a spoken acknowledgement. The big model is never in the conversational path.
 - **Three LLM modes, one toggle** — *Local only* / *Mixed* (default — local with cloud safety net) / *Full Cloud LLM* (skip Ollama entirely, route every subtask through your cloud provider). Pick per-app in Settings; per-session "Local only" override always wins for privacy-sensitive work.
@@ -154,7 +156,7 @@ Claude Pro auto-renewing.
 - **Performance observability** — Usage tab shows per-mode (Chat / Code / Analytic) time-to-result stats (mean / p50 / p95 / max) plus your slowest 10 tasks. Screenshot it into a bug report when something looks off.
 - **Capabilities tab** — built-in Tools and learned Skills merged into one filterable list with type badges, so users see "what can my agent do?" in one place. Skills graduate from `TESTING` to `ACTIVE` automatically; the count grows as the install matures.
 - **Auto-approve countdown** — opt-in setting that turns the high-risk approval gate fail-permissive after N seconds, with a visible amber timer so you have time to Deny if the agent's about to do something unexpected. Default: off.
-- **Drive OpenTeddy from Telegram** — toggle on a single bot token + chat-ID whitelist in Settings → Notification Credentials and your agent is reachable from your phone over Telegram: send any text as a goal, get live "⚙️ Subtask 3/5 · 🎯 0.85 · 💰 $0.043" progress that edits in place, a final summary, and `📎 Files produced` with text artifacts inlined / binary artifacts sent as tap-to-download attachments. Auto-approves high-risk tools so you don't have to leave Telegram for routine work — but a hard denylist (`rm`, `rmdir`, `DROP TABLE`, `TRUNCATE TABLE`, `DELETE FROM`, `mkfs`, `dd if=…/of=/dev/…`, …) hard-blocks destructive actions regardless. Commands: `/start`, `/help`, `/cancel`, `/new`. See [Remote Access](#remote-access-phone--telegram--tailscale).
+- **Drive OpenTeddy from Telegram** — toggle on a single bot token + chat-ID whitelist in Settings → Notification Credentials and your agent is reachable from your phone over Telegram: send any text as a goal (or a document / photo, which lands in the session's `uploads/` for the next message), see a small animated *Thinking* indicator while it works, and get the answer as formatted text — not raw Markdown — plus `📎 Files produced` with text artifacts inlined / binary artifacts sent as tap-to-download attachments. Each message sees the last few turns of the chat. Auto-approves high-risk tools so you don't have to leave Telegram for routine work — but a hard denylist (`rm`, `rmdir`, `DROP TABLE`, `TRUNCATE TABLE`, `DELETE FROM`, `mkfs`, `dd if=…/of=/dev/…`, …) hard-blocks destructive actions regardless. Commands: `/start`, `/help`, `/cancel`, `/new`. See [Remote Access](#remote-access-phone--telegram--tailscale).
 - **Phone-friendly web UI over Tailscale** — `./run.sh --host 0.0.0.0` + your tailnet means the dashboard works from your phone's browser too. Sessions / chat-mode / artifact previews all responsive; mobile header collapses the session controls into a ⋯ kebab. No port-forwarding, no nginx, no public DNS — just install the Tailscale app on your phone and hit `http://<your-machine>:8000`.
 - **Native macOS desktop client** — Tauri 2.x shell with onboarding wizard (Ollama install + tier-based model pull), language picker, mode-locked sessions, full window-drag regions, auto-update against GitHub Releases, and one-click diagnostics download. See [`desktop/`](desktop/).
 - **Optional cloud account** — sign in with Google to enable cross-device sync (skills, memory, settings) and licence-gated premium content. Anonymous Firebase auth runs from day one; the upgrade is opt-in. The OSS web UI stays Firebase-free — auth lives only in the desktop shell.
@@ -686,15 +688,22 @@ spells out exactly which field needs another look.
 | You send | What happens |
 |---|---|
 | any text | run as a goal in this chat's bound session; reply with the result |
+| a document or photo | saved to the session's `uploads/`; attached to your next message (or to its caption) — e.g. then say *"幫我總結"* or *"列印"* |
+| *"列印"* / *"印 2 份 雙面"* after a file | printed straight away — see [Printing](#printing) |
+| *"關客廳燈"*, *"家裡有哪些設備離線"* | answered by Home Assistant — see [Smart home](#smart-home-home-assistant) |
+| *"確認 1234"* | runs a lock / alarm / garage action that was held for confirmation |
 | `/start` | confirm you're connected |
 | `/help` | command list |
 | `/cancel` | abort the currently-running task |
 | `/new` | start a fresh session (old one stays in history) |
 
-The agent's reply includes:
+While it works, a small looping *Thinking* sticker appears after 2 s and
+is deleted when the answer arrives. The agent's reply includes:
 
-- **Status line** — `✅ Completed · 12.4s · 3 subtasks`
-- **Summary text** — the orchestrator's final summary, capped at ~3500 chars
+- **The answer first** — Markdown rendered as Telegram formatting (bold,
+  lists, links, code; headings become bold lines and tables become
+  bullets), split across messages when long, ending with one quiet line
+  such as *✅ 完成 · 11.7 秒*
 - **`📎 Files produced`** — every artifact (incl. shell-redirect outputs
   caught by the post-subtask workspace scanner) with size + emitting tool
 - **Inline content** — text artifacts under 3 KB sent as a follow-up
@@ -920,6 +929,126 @@ whole design. STT/TTS are not included yet — this is the text layer they
 will sit on. `timings` in every reply measures each lane rather than
 assuming.
 
+## Printing
+
+Upload a file and say you want it printed — in the dashboard chat or in
+Telegram. A short print request never goes through the planner: the
+attached files are handed to CUPS (`lp`) and the reply arrives in about a
+second.
+
+| You say | What happens |
+|---|---|
+| *"我要列印"* / *"print this"* | prints the files attached to this message |
+| *"幫我印 2 份 雙面"*, *"印第 1 到 3 頁 黑白"* | copies, two-sided / one-sided, black and white, page range |
+| *"列印"* with no file | prints the latest upload in this chat, if it is less than 2 hours old |
+| *"把題庫整理好再印出來"* | not a print command — the agent does the work, then calls the `print_file` tool |
+| *"碳粉還有嗎"* | a question about the printer, not a print job — the agent can call `printer_status` |
+
+```
+印表機：Brother HL-L3270CDW series
+🖨️ 已送出列印：考卷.pdf（3 頁，2 份，雙面），工作編號 42
+⚠️ 黑色碳粉剩 10%，快用完了
+```
+
+**Formats.** PDF, images (fit to the page), text, Markdown and CSV print
+directly; Word, Excel, PowerPoint, RTF and HTML are converted to PDF with
+LibreOffice (`soffice`) first.
+
+**Which printer.** Settings → 🖨️ Printer → *Default printer*; empty means
+the CUPS default, or the only printer the machine has. The same panel
+shows the printer's state and toner levels, which OpenTeddy asks of the
+printer itself over IPP (`ipptool`). `GET /printers` returns the same.
+
+**Make the queue permanent.** On Linux a network printer usually shows up
+as a temporary *driverless* queue that disappears while the printer is
+off, so a request sent then fails. A permanent queue keeps the job and
+prints it when the printer wakes:
+
+```bash
+lpinfo --include-schemes dnssd -v          # find the printer's dnssd:// address
+lpadmin -p Office_Printer -E -v 'dnssd://…' -m everywhere -o printer-error-policy=retry-job
+```
+
+then pick it in Settings → Printer. Members of the `lpadmin` group don't
+need sudo for this.
+
+**Guards.** Only files inside the session workspace can be printed, so the
+agent can't put arbitrary files from the machine on paper. Copies are
+capped (Settings → *Max copies per print*, default 20) and one job is
+capped at 500 sheets. Scheduled runs never print on their own.
+
+## Smart home (Home Assistant)
+
+OpenTeddy doesn't talk to each brand. [Home Assistant](https://www.home-assistant.io/)
+does — 米家 / Xiaomi, Google TV and Chromecast, Philips Hue, Tuya and
+2,000+ more — and OpenTeddy talks to Home Assistant with one access token.
+Home Assistant keeps working (its app, its automations) when OpenTeddy is
+down.
+
+```
+Telegram / chat / schedule ──▶ OpenTeddy ──▶ Home Assistant ──▶ 米家 · 小愛音箱 · TV · …
+```
+
+### Set it up
+
+1. **Install Home Assistant** next to OpenTeddy (Docker; `--network host`
+   lets it discover devices on the LAN):
+
+   ```bash
+   docker run -d --name homeassistant --restart unless-stopped --network host \
+     -e TZ=Asia/Taipei -v ~/homeassistant:/config ghcr.io/home-assistant/home-assistant:stable
+   ```
+
+   Open `http://<machine>:8123` and create the owner account.
+2. **Add your brands** in Settings → Devices & services. For 米家 use
+   [Xiaomi Miot Auto](https://github.com/al-one/hass-xiaomi-miot) (copy
+   `custom_components/xiaomi_miot` into `~/homeassistant/custom_components/`
+   and restart): it supports the `cn`, `tw`, `sg`, `us`, `de`, `ru` and
+   `i2` servers and several accounts at once — add it once per region if
+   your devices are split between a Taiwan and a China account. Choose
+   **cloud** connection mode; local mode left most mainland devices,
+   including the 小愛音箱, unavailable. Xiaomi's official integration
+   doesn't list Taiwan.
+3. **Name devices the way you speak** (*客廳燈*, *臥室冷氣*), or add
+   aliases. Short commands are matched by name.
+4. **Create a long-lived access token** (your profile → Security), paste it
+   into OpenTeddy's Settings → 🏠 Home Assistant, Save, and press *Test
+   connection*. It shows the version, how many devices, and which speaker
+   is the 小愛音箱. `GET /home/status` returns the same.
+
+### What you can say
+
+| You say | Path | What happens |
+|---|---|---|
+| *"關客廳燈"*, *"冷氣開 26 度"*, *"電視音量調小"* | direct, ~1 s | Home Assistant's Assist runs it; if Assist doesn't understand, the agent takes over with the `home_*` tools |
+| *"家裡有哪些設備離線"*, *"有設備斷線嗎"* | direct, <0.1 s | offline devices, one row per physical device, with room and how long |
+| *"家裡有哪些設備"* | direct | every device by room, online / offline |
+| *"叫小愛說晚餐好了"* | agent | the 小愛音箱 says it (`xiaoai`, mode `say`) |
+| *"叫小愛打開冷氣"* | agent | sent to 小愛 as if spoken (mode `command`) — reaches infrared devices only 小愛 controls |
+| *"我出門了，把該關的都關掉"* | agent | `home_overview` / `home_devices` → `home_control` for each |
+| *"每天早上 9 點檢查有沒有設備離線，有才通知我"* | schedule | a daily check that pings Telegram only when something is offline |
+| *"確認 1234"* | direct | runs an action that was held for confirmation |
+
+"Offline" means none of a device's entities has a real state and at least
+one is unavailable — buttons stay `unknown` forever, and cloud integrations
+leave single unsupported features unavailable on devices that are fine.
+
+### Safety
+
+- **Confirmation codes.** Locks, alarm panels, valves, sirens, water
+  heaters and garage / gate / door covers are never switched directly. The
+  action is held and a 4-digit code comes back; only a **new message from
+  you**, *"確認 1234"*, runs it — once, within 5 minutes. The model can't
+  confirm on its own, Telegram's auto-approval doesn't apply, and a
+  scheduled run can't confirm. The list is Settings → *Need confirmation*.
+- **Sensitive words never take the fast path** (鎖, 保全, 瓦斯, 車庫, lock,
+  alarm, garage…), nor do multi-step requests.
+- **Home Assistant's own exposure settings still apply** to Assist: it only
+  acts on entities exposed under Settings → Voice assistants → Expose, and
+  locks are not exposed by default. Check that list for anything else you
+  don't want controlled by voice.
+- The token is stored as a secret and redacted from diagnostics exports.
+
 ## Worked example: an e-commerce growth loop (Shopify + Meta Ads)
 
 Three agents, one ledger, three schedules — set up in one command, spending nothing:
@@ -1004,6 +1133,7 @@ What the runtime enforces, and what stays the operator's job.
 | Human approval | high-risk tools wait for a human (web UI, `openteddy` terminal prompt, `POST /tasks/{id}/approve`, Telegram policy). Waiting time is not billed to the task's deadline |
 | Unattended only inside a scope | `require_approval=false` and scheduled auto-approval are refused for unscoped agents; the destructive denylist applies even then |
 | Privacy | `local_only` sessions never call a cloud model; a task can tighten it (`privacy: local_only`), never loosen |
+| Physical actions need a person | locks, alarms, valves and garage doors are held until *you* reply `確認 <code>` (the model, Telegram auto-approval and schedules can't confirm); printing takes only workspace files, with copies and sheets capped |
 
 | Operator's job | Why |
 |---|---|
@@ -1322,6 +1452,20 @@ is just for headless / Docker-compose installs.
 | `TELEGRAM_INBOUND_WHITELIST` | — | Comma-separated chat-IDs allowed to drive the agent (numeric for users / groups, `@channelname` for public channels). **Empty = inbound refuses to start even if the toggle is on** — we don't run open bots. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | — | Used by the `email_send` tool. `SMTP_PORT` defaults to `587`. |
 | `WEBHOOK_SECRET` | — | Optional shared-secret for `POST /webhooks/{session_id}`. Empty = endpoint is open to anyone on the network (UI warns when this is the case). |
+
+### Printing & smart home
+
+Also editable in **Settings → 🖨️ Printer** and **Settings → 🏠 Home Assistant**.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRINTER_NAME` | — | CUPS queue for printing. Empty = the CUPS default, or the only printer there is. |
+| `PRINT_MAX_COPIES` | `20` | Upper limit on copies in one request. |
+| `HA_URL` | `http://127.0.0.1:8123` | Where Home Assistant runs. |
+| `HA_TOKEN` | — | Long-lived access token from your Home Assistant profile. Empty = smart-home features off. |
+| `HA_LANGUAGE` | `zh-tw` | Language for short device commands sent to Assist. |
+| `HA_CONFIRM_DOMAINS` | `lock,alarm_control_panel,valve,siren,water_heater` | Domains held for `確認 <code>`; garage / gate / door covers are always held. |
+| `XIAOAI_ENTITY` | — | `media_player` entity of the 小愛音箱; found automatically when empty. |
 
 ## Desktop Client (macOS)
 
