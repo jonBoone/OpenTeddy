@@ -122,7 +122,8 @@ def default_printer() -> str:
     if len(printers) == 1:
         return printers[0]["name"]
     if not printers:
-        raise PrintError("找不到印表機。請先在這台機器的系統設定加入印表機，或確認它和印表機在同一個網路。")
+        raise PrintError("找不到印表機：它可能關機或還在睡眠。打開印表機，等一分鐘讓這台機器重新找到它再試。"
+                         "如果一直找不到，確認兩台在同一個網路。")
     names = "、".join(p["name"] for p in printers)
     raise PrintError(f"有多台印表機（{names}），請在 Settings → 印表機 選一台當預設。")
 
