@@ -269,6 +269,31 @@ def _unregister_job(schedule_id: str) -> None:
         pass
 
 
+class SchedulerUnavailable(RuntimeError):
+    """Scheduling can't work on this install (APScheduler missing). Said
+    to the person as is — falling through to the agent made it improvise
+    a script and report a schedule that didn't exist."""
+
+
+UNAVAILABLE_MESSAGE = (
+    "⚠️ 排程功能目前停用：這台機器的 OpenTeddy 沒有安裝 APScheduler，所以排程既建不起來也不會執行。"
+    "請在 OpenTeddy 目錄執行 `.venv/bin/pip install -r requirements.txt` 再重新啟動"
+    "（或用 `openteddy update` / `./deploy.sh`），然後再說一次。"
+)
+
+
+def available() -> bool:
+    try:
+        import apscheduler  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def running() -> bool:
+    return _scheduler is not None and bool(getattr(_scheduler, "running", False))
+
+
 def _cron_to_trigger(cron: str):
     """Parse a 5-field cron string into an APScheduler CronTrigger.
     Wrapped so cron validation is centralised — _validate_cron and
@@ -282,6 +307,8 @@ def _validate_cron(cron: str) -> None:
     expected to surface the error string to the user."""
     try:
         _cron_to_trigger(cron)
+    except ImportError as exc:
+        raise SchedulerUnavailable(UNAVAILABLE_MESSAGE) from exc
     except Exception as exc:  # noqa: BLE001
         raise ValueError(
             f"Invalid cron expression {cron!r}: {exc}. "

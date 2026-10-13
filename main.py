@@ -749,10 +749,13 @@ GITHUB_REPO = os.getenv("OPENTEDDY_GITHUB_REPO", "m31527/OpenTeddy")
 
 @app.get("/health")
 async def health() -> dict:
+    import scheduler as _sched
     return {
         "status":  "ok",
         "version": OPENTEDDY_VERSION,
         "memory":  memory_manager.is_available,
+        # "disabled" = APScheduler missing: no schedule will ever fire.
+        "scheduler": "running" if _sched.running() else ("stopped" if _sched.available() else "disabled"),
     }
 
 
@@ -2032,6 +2035,9 @@ async def _start_task(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
+        from scheduler import SchedulerUnavailable
+        if isinstance(exc, SchedulerUnavailable):
+            return task_id, session_id, None, str(exc)
         logger.warning(
             "scheduling_intent detection failed (falling through to planner): %s",
             exc, exc_info=False,

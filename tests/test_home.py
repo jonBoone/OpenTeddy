@@ -122,6 +122,14 @@ def test_intent() -> None:
         assert HI.parse_home_query(t) is None, t
     print("  ✓ device commands recognised; sensitive words, other work and attachments are not; 確認 code exact")
     print("  ✓ 哪些設備離線 / 家裡有哪些設備 recognised; 'my internet is offline' is not")
+    xa = {"叫小愛說：早安，該出門了！": ("say", "早安，該出門了！"), "請小愛音箱提醒出門": ("say", "提醒你：出門"),
+          "用小愛播報 今天會下雨": ("say", "今天會下雨"), "叫小愛打開冷氣": ("command", "打開冷氣"),
+          "跟小愛說打開客廳的冷氣": ("command", "打開客廳的冷氣")}
+    for t, want in xa.items():
+        assert HI.parse_xiaoai(t) == want, (t, HI.parse_xiaoai(t))
+    for t in ("請小愛音箱每天週一到週五早上7：40分提醒出門", "叫小愛明天提醒我開會", "小愛音箱還在嗎", "every weekday tell xiaoai hi"):
+        assert HI.parse_xiaoai(t) is None, t
+    print("  ✓ 叫小愛說 / 提醒 → say, 叫小愛打開… / 跟小愛說… → command; recurring or future wording never fires now")
 
 
 # ── B ────────────────────────────────────────────────────────────────────────
@@ -278,7 +286,8 @@ async def test_orchestrator() -> None:
     def fake():
         o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=planner,
                                   _classify_intent=planner, _fast_chat_response=planner)
-        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_home_overview", "_direct_print", "_recent_uploads"):
+        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_home_overview", "_home_xiaoai",
+                     "_direct_print", "_recent_uploads"):
             setattr(o, name, (lambda n: lambda *a, **k: getattr(Orchestrator, n)(o, *a, **k))(name))
         return o
 
@@ -312,6 +321,14 @@ async def test_orchestrator() -> None:
     res = await run(f"確認 {code}")
     assert res.status == TaskStatus.FAILED and "過期" in res.summary
     print("  ✓ 確認 code from a person runs the held lock once; scheduled runs can't")
+
+    res = await run("叫小愛說：早安，該出門了！")
+    assert res.status == TaskStatus.COMPLETED and res.summary == "🔊 小愛說了：「早安，該出門了！」", res
+    assert posts()[-1][1]["text"] == "早安，該出門了！" and posts()[-1][1]["execute"] is False
+    res = await run("叫小愛打開冷氣")
+    assert posts()[-1][1] == {"entity_id": "media_player.xiaomi_lx06_7538_play_control", "text": "打開冷氣",
+                              "execute": True, "silent": False}
+    print("  ✓ 叫小愛說… / 叫小愛打開冷氣 go straight to the speaker, no planning")
 
     res = await run("家裡有哪些設備離線")
     assert res.status == TaskStatus.COMPLETED and res.summary.startswith("📴 離線的設備（2 台）"), res

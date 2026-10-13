@@ -988,7 +988,10 @@ class Orchestrator:
                      if (req.context or {}).get("triggered_by") != "schedule" else None)
             if _code:
                 return await self._home_confirm(req, _code)
-            from home_intent import parse_home_query
+            from home_intent import parse_home_query, parse_xiaoai
+            _xa = parse_xiaoai(req.goal)
+            if _xa:
+                return await self._home_xiaoai(req, *_xa)
             _home_q = parse_home_query(req.goal)
             if _home_q:
                 return await self._home_overview(req, _home_q)
@@ -1401,6 +1404,17 @@ class Orchestrator:
         except HA.HAError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
         return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
+
+    async def _home_xiaoai(self, req: TaskRequest, mode: str, text: str) -> TaskResult:
+        """叫小愛說… / 叫小愛打開冷氣 — straight to the speaker, no model,
+        so a 07:40 weekday reminder doesn't depend on a planning round."""
+        import home_assistant as HA
+        try:
+            await HA.xiaoai(text, execute=(mode == "command"))
+        except HA.HAError as exc:
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        msg = f"🔊 小愛說了：「{text}」" if mode == "say" else f"🔊 已請小愛執行：「{text}」"
+        return await self._finish_direct(req, msg, True)
 
     async def _home_confirm(self, req: TaskRequest, code: str) -> TaskResult:
         import home_assistant as HA

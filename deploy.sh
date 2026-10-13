@@ -96,13 +96,21 @@ fi
 after="$(git rev-parse HEAD)"
 if [[ "$before" == "$after" ]]; then
   echo "✓ already up to date ($(git rev-parse --short HEAD))"
-  [[ "$restart" == 1 ]] || exit 0
 else
   echo "✓ $(git rev-parse --short "$before") → $(git rev-parse --short "$after")  ($(git diff --name-only "$before" "$after" | wc -l | tr -d ' ') files)"
-  if git diff --name-only "$before" "$after" | grep -qx requirements.txt && [[ -x .venv/bin/pip ]]; then
-    echo "• requirements.txt changed → installing"
+fi
+# Install when requirements.txt changed OR a package is missing: a venv
+# that missed one once stayed broken through every later update.
+if [[ -x .venv/bin/pip ]]; then
+  missing="$(.venv/bin/python scripts/check_requirements.py 2>/dev/null || true)"
+  if [[ -n "$missing" ]] || git diff --name-only "$before" "$after" | grep -qx requirements.txt; then
+    echo "• installing requirements${missing:+ (missing: $(echo $missing | tr '\n' ' '))}"
     .venv/bin/pip install -q -r requirements.txt
+    restart=1
   fi
+fi
+if [[ "$before" == "$after" && "$restart" != 1 ]]; then
+  exit 0
 fi
 svc=(./openteddy service restart)
 [[ "$system" == 1 ]] && svc+=(--system)

@@ -1241,6 +1241,12 @@ async def _run_goal_for_chat(chat_id: str, goal_text: str) -> None:
             _running_chats.pop(chat_id, None)
             return
     except Exception as exc:  # noqa: BLE001
+        from scheduler import SchedulerUnavailable
+        if isinstance(exc, SchedulerUnavailable):
+            # Say it. Falling through let the agent fake a schedule.
+            await _send_reply(chat_id, str(exc))
+            _running_chats.pop(chat_id, None)
+            return
         logger.warning(
             "Telegram: scheduling_intent detection failed for chat=%s, "
             "falling through: %s", chat_id, exc,

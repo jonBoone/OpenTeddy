@@ -483,6 +483,8 @@ def cmd_models(rt: Runtime, a: argparse.Namespace) -> int:
 def cmd_health(rt: Runtime, a: argparse.Namespace) -> int:
     h = rt.req("GET", "/health")
     rt.out(h, f"✓ runtime up  v{h.get('version', '?')}  @ {rt.url}")
+    if h.get("scheduler") == "disabled" and not rt.json_out:
+        print("⚠ scheduler disabled — APScheduler missing; run .venv/bin/pip install -r requirements.txt and restart")
     return 0
 
 
@@ -714,20 +716,29 @@ def cmd_update(rt: Runtime, a: argparse.Namespace) -> int:
         die("git pull failed (local changes? run git status in the repo)")
     after = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "HEAD"],
                            capture_output=True, text=True).stdout.strip()
+    changed: List[str] = []
     if before == after:
         print("✓ already up to date")
-        if not a.restart:
-            return 0
     else:
         changed = subprocess.run(["git", "-C", REPO_DIR, "diff", "--name-only", before, after],
                                  capture_output=True, text=True).stdout.split()
         print(f"✓ updated {before[:7]} → {after[:7]}  ({len(changed)} files)")
-        if "requirements.txt" in changed:
-            pip = os.path.join(REPO_DIR, ".venv", "bin", "pip")
-            if os.path.exists(pip):
-                print("  requirements.txt changed → installing")
-                subprocess.run([pip, "install", "-q", "-r",
-                                os.path.join(REPO_DIR, "requirements.txt")], text=True)
+    # Install when requirements.txt changed OR something is missing — a venv
+    # that missed a package once used to stay broken through every update.
+    installed = False
+    py = os.path.join(REPO_DIR, ".venv", "bin", "python")
+    pip = os.path.join(REPO_DIR, ".venv", "bin", "pip")
+    if os.path.exists(pip):
+        chk = subprocess.run([py, os.path.join(REPO_DIR, "scripts", "check_requirements.py")],
+                             capture_output=True, text=True)
+        if "requirements.txt" in changed or chk.returncode != 0:
+            why = "requirements.txt changed" if "requirements.txt" in changed else \
+                "missing: " + ", ".join(chk.stdout.split())
+            print(f"  {why} → installing")
+            subprocess.run([pip, "install", "-q", "-r", os.path.join(REPO_DIR, "requirements.txt")], text=True)
+            installed = True
+    if before == after and not installed and not a.restart:
+        return 0
     print("↻ restarting service")
     return _service_control(rt, "restart", system=a.system)
 

@@ -62,6 +62,35 @@ def parse_home_query(goal: str) -> Optional[str]:
     return None
 
 
+_XIAOAI = r"小[愛爱](?:音箱)?(?:\s*pro)?"
+_XA_TELL = re.compile(rf"^\s*(?:請|麻煩)?\s*跟\s*{_XIAOAI}\s*說\s*[:：,，]?\s*(.+)$", re.I)
+_XA_SAY = re.compile(rf"^\s*(?:請|叫|讓|用|要)?\s*{_XIAOAI}\s*(?:幫我|跟大家|對大家)?\s*"
+                     rf"(說|講|唸|念|播報|廣播|提醒)\s*(?:我|大家|你)?\s*[:：,，]?\s*(.+)$", re.I)
+_XA_DO = re.compile(rf"^\s*(?:請|叫|讓)\s*{_XIAOAI}\s*(?:幫我)?\s*((?:打開|開啟|開|關掉|關閉|關|調|設定|設成|播放|暫停|停止|切換|升|降).+)$", re.I)
+# Recurring or future → that's a schedule request, never "do it now".
+_FUTURE = re.compile(r"(每天|每日|每週|每周|每個|週[一二三四五六日末]|周[一二三四五六日末]|星期|禮拜|明天|後天|下週|"
+                     r"every|tomorrow|weekday)", re.I)
+
+
+def parse_xiaoai(goal: str) -> Optional[tuple]:
+    """("say", text) for 叫小愛說… / 請小愛提醒…; ("command", text) for
+    叫小愛打開冷氣 / 跟小愛說…; else None."""
+    t = (goal or "").strip()
+    if not t or t.startswith("[Attachments in workspace") or len(t) > 80 or _FUTURE.search(t):
+        return None
+    m = _XA_TELL.match(t)
+    if m:
+        return ("command", m.group(1).strip())
+    m = _XA_SAY.match(t)
+    if m:
+        verb, text = m.group(1), m.group(2).strip().strip("「」\"'")
+        return ("say", f"提醒你：{text}" if verb == "提醒" else text)
+    m = _XA_DO.match(t)
+    if m:
+        return ("command", m.group(1).strip())
+    return None
+
+
 def parse_confirmation(goal: str) -> Optional[str]:
     """The code when the message is exactly "確認 1234"."""
     m = _CONFIRM.match(goal or "")
