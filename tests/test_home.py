@@ -130,6 +130,17 @@ def test_intent() -> None:
     for t in ("請小愛音箱每天週一到週五早上7：40分提醒出門", "叫小愛明天提醒我開會", "小愛音箱還在嗎", "every weekday tell xiaoai hi"):
         assert HI.parse_xiaoai(t) is None, t
     print("  ✓ 叫小愛說 / 提醒 → say, 叫小愛打開… / 跟小愛說… → command; recurring or future wording never fires now")
+    music = {"幫我播放家裡的，小米音箱播放音樂": "播放音樂", "播放音樂": "播放音樂", "放點輕音樂": "放點輕音樂",
+             "我想聽周杰倫的歌": "我想聽周杰倫的歌", "叫小愛放音樂": "放音樂", "小愛音量調到30": "音量調到30",
+             "小米音箱下一首": "下一首", "停止音樂": "暫停播放", "play some music": "播放音樂", "stop the music": "暫停播放"}
+    for t, cmd in music.items():
+        assert HI.parse_xiaoai(t) == ("command", cmd), (t, HI.parse_xiaoai(t))
+    for t in ("我要製作睡眠音樂", "電視播放音樂", "幫我整理一份播放音樂的清單", "小愛音箱還在嗎"):
+        assert HI.parse_xiaoai(t) is None, t
+    assert HI.looks_home_related("把氣氛弄浪漫一點的燈光") and HI.looks_home_related("小米音箱")
+    assert not HI.looks_home_related("今天星期幾")
+    print("  ✓ music → 小愛 command (小米音箱 / 音箱 names, stop, volume, English mapped to Chinese); "
+          "TV, creative and multi-step requests are not")
 
 
 # ── B ────────────────────────────────────────────────────────────────────────
@@ -329,6 +340,37 @@ async def test_orchestrator() -> None:
     assert posts()[-1][1] == {"entity_id": "media_player.xiaomi_lx06_7538_play_control", "text": "打開冷氣",
                               "execute": True, "silent": False}
     print("  ✓ 叫小愛說… / 叫小愛打開冷氣 go straight to the speaker, no planning")
+
+    res = await run("幫我播放家裡的，小米音箱播放音樂")
+    assert res.summary == "🔊 已請小愛執行：「播放音樂」" and posts()[-1][1]["execute"] is True, res
+    print("  ✓ the request that failed in real use now plays through 小愛")
+
+    # A home request Assist can't handle must reach the planner, never the
+    # no-tools chat lane (the classifier once said "the LLM can't control devices").
+    calls = []
+    async def classify(*a, **k):
+        calls.append("classifier")
+        return {"needs_tools": False, "is_pure_chat": True, "confidence": 0.95}
+    async def chat(*a, **k): calls.append("chat"); raise _ReachedPlanner()
+    async def plan(*a, **k): calls.append("planner"); raise _ReachedPlanner()
+    _Client.assist_reply = {"response": {"response_type": "error", "data": {"code": "no_intent_match"}}}
+    o = fake()
+    o._classify_intent, o._fast_chat_response, o._plan = classify, chat, plan
+    try:
+        await Orchestrator.run(o, TaskRequest(goal="把氣氛弄浪漫一點的燈光", session_id="s1"))
+    except Exception:  # noqa: BLE001
+        pass
+    assert "classifier" not in calls and "chat" not in calls, calls
+    calls.clear()
+    o = fake()
+    o._classify_intent, o._fast_chat_response, o._plan = classify, chat, plan
+    try:
+        await Orchestrator.run(o, TaskRequest(goal="把燈光弄浪漫一點", session_id="s1",
+                                              mode="chat", context={"mode_override": True}))
+    except Exception:  # noqa: BLE001
+        pass
+    assert "chat" not in calls, f"auto chat lane kept for a home request: {calls}"
+    print("  ✓ home requests Assist can't handle skip the classifier and the auto chat lane")
 
     res = await run("家裡有哪些設備離線")
     assert res.status == TaskStatus.COMPLETED and res.summary.startswith("📴 離線的設備（2 台）"), res

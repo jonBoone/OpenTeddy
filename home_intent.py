@@ -62,11 +62,22 @@ def parse_home_query(goal: str) -> Optional[str]:
     return None
 
 
-_XIAOAI = r"小[愛爱](?:音箱)?(?:\s*pro)?"
+# Every name the speaker goes by: 小愛 / 小愛同學 / 小愛音箱 Pro / 小米(AI)音箱 / 智慧音箱 / 音箱.
+_XIAOAI = r"(?:小[愛爱](?:同學)?(?:音箱)?(?:\s*pro)?|小米\s*(?:ai\s*)?音箱|智慧音箱|音箱)"
 _XA_TELL = re.compile(rf"^\s*(?:請|麻煩)?\s*跟\s*{_XIAOAI}\s*說\s*[:：,，]?\s*(.+)$", re.I)
 _XA_SAY = re.compile(rf"^\s*(?:請|叫|讓|用|要)?\s*{_XIAOAI}\s*(?:幫我|跟大家|對大家)?\s*"
                      rf"(說|講|唸|念|播報|廣播|提醒)\s*(?:我|大家|你)?\s*[:：,，]?\s*(.+)$", re.I)
-_XA_DO = re.compile(rf"^\s*(?:請|叫|讓)\s*{_XIAOAI}\s*(?:幫我)?\s*((?:打開|開啟|開|關掉|關閉|關|調|設定|設成|播放|暫停|停止|切換|升|降).+)$", re.I)
+_XA_DO = re.compile(rf"^\s*(?:請|叫|讓|用|幫我用)?\s*(?:家裡的)?\s*{_XIAOAI}\s*(?:幫我)?\s*"
+                    rf"((?:打開|開啟|開|關掉|關閉|關|調|設定|設成|播放|放|暫停|停止|繼續|切換|下一首|上一首|升|降|"
+                    rf"音量|聽|來一?首|來點).*)$", re.I)
+# Music without naming a device goes to 小愛 too — it plays from its own
+# music service. "我要製作睡眠音樂" is work, not playback (no play verb).
+_PLAY = r"(?:播放|放一?首|放點|放些|放|來一?首|來點|想聽|要聽|聽)"
+_MUSIC = re.compile(rf"{_PLAY}.*(?:音樂|歌|曲|電台|podcast|music|songs?|playlist)|"
+                    rf"(?:play|put on)\s+(?:some\s+)?(?:music|songs?)", re.I)
+_MUSIC_STOP = re.compile(r"^(?:請|幫我)?\s*(?:停止|暫停|關掉|關閉|停)(?:播放)?\s*(?:音樂|歌)|^(?:stop|pause)\s+(?:the\s+)?music", re.I)
+_OTHER_PLAYER = re.compile(r"(電視|tv|chromecast|客廳電視)", re.I)
+_SPEAKER_THEN_PLAY = re.compile(rf"{_XIAOAI}[^，,。]*?({_PLAY}.*)$", re.I)
 # Recurring or future → that's a schedule request, never "do it now".
 _FUTURE = re.compile(r"(每天|每日|每週|每周|每個|週[一二三四五六日末]|周[一二三四五六日末]|星期|禮拜|明天|後天|下週|"
                      r"every|tomorrow|weekday)", re.I)
@@ -88,7 +99,26 @@ def parse_xiaoai(goal: str) -> Optional[tuple]:
     m = _XA_DO.match(t)
     if m:
         return ("command", m.group(1).strip())
+    if _OTHER_PLAYER.search(t) or _MULTI.search(t) or len(t) > 40:
+        return None
+    if _MUSIC_STOP.search(t):
+        return ("command", "暫停播放")
+    if not _CJK.search(t):                  # 小愛 only understands Chinese
+        return ("command", "播放音樂") if _MUSIC.search(t) else None
+    m = _SPEAKER_THEN_PLAY.search(t)        # "幫我播放家裡的，小米音箱播放音樂" → "播放音樂"
+    if m and _MUSIC.search(m.group(1)):
+        return ("command", m.group(1).strip("。！!？? "))
+    if _MUSIC.search(t):
+        return ("command", re.sub(r"^(?:請|麻煩|幫我|可以)+\s*", "", t).strip("。！!？? 吧"))
     return None
+
+
+def looks_home_related(goal: str) -> bool:
+    """Mentions a device or the speaker: such a request must keep its tools
+    (the intent classifier once sent 「小米音箱播放音樂」 to the no-tools chat
+    lane because "the LLM can't control devices")."""
+    t = goal or ""
+    return bool(_DEVICE.search(t) or re.search(_XIAOAI, t, re.I))
 
 
 def parse_confirmation(goal: str) -> Optional[str]:

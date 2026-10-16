@@ -104,8 +104,10 @@ _SCHEMAS = {
     "xiaoai": _fn(
         "xiaoai",
         "Use the 小愛音箱 (Xiao AI speaker). mode='say' speaks the text aloud "
-        "(announcements). mode='command' runs the text as if someone said it to 小愛, "
-        "e.g. '打開冷氣' — this reaches infrared devices (air-con, TV) that only 小愛 controls.",
+        "(announcements). mode='command' runs the text as if someone said it to 小愛 — "
+        "use it for music ('播放音樂', '放周杰倫的歌', '暫停播放', '音量調到30'; 小愛 plays "
+        "from its own music service) and for infrared devices only 小愛 controls ('打開冷氣'). "
+        "Commands must be in Chinese.",
         {"text": {"type": "string"},
          "mode": {"type": "string", "enum": ["say", "command"], "description": "say (default) or command"}},
         ["text"]),

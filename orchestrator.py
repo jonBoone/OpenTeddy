@@ -988,7 +988,9 @@ class Orchestrator:
                      if (req.context or {}).get("triggered_by") != "schedule" else None)
             if _code:
                 return await self._home_confirm(req, _code)
-            from home_intent import parse_home_query, parse_xiaoai
+            from home_intent import parse_home_query, parse_xiaoai, looks_home_related
+            if looks_home_related(req.goal):
+                req.context["home_request"] = True     # keep the tools; never the chat lane
             _xa = parse_xiaoai(req.goal)
             if _xa:
                 return await self._home_xiaoai(req, *_xa)
@@ -1018,6 +1020,11 @@ class Orchestrator:
         # in a chat session goes from 2 LLM calls (classifier + answer)
         # to 1 (answer only) — typically the difference between feeling
         # snappy and feeling sluggish on a local model.
+        # A home request picked for the chat lane automatically (Telegram's
+        # lane guess) still needs its tools; an explicit chat session stays chat.
+        if (session_mode == "chat" and (req.context or {}).get("home_request")
+                and (req.context or {}).get("mode_override")):
+            session_mode = "code"
         if session_mode == "chat":
             logger.info(
                 "Chat-mode fast-path engaged (skipped intent classifier): task=%s",
@@ -1075,7 +1082,8 @@ class Orchestrator:
         # (>= 0.7) AND says BOTH needs_tools=False AND is_pure_chat=True.
         # Any uncertainty falls through to the normal plan→execute flow.
         if (getattr(config, "intent_classifier_enabled", True)
-                and not (req.context or {}).get("db_context")):
+                and not (req.context or {}).get("db_context")
+                and not (req.context or {}).get("home_request")):
             # db_context guard: in a DB-connected session, a data question
             # ("how many factories does brand X have") is easily
             # misclassified as pure-chat — and the fast path would then
