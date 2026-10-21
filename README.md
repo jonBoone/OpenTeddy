@@ -133,7 +133,7 @@ Claude Pro auto-renewing.
 - **Agents with a real permission boundary** — a reusable role = persona + bound database + API credentials + allowed domains + API docs + **tool scope** (`allowed_tools`). Credentials never enter a prompt (the model writes `{{CRED:name}}`, the server substitutes only for allow-listed hosts); a scoped agent's executor sees only its tools and the registry refuses the rest, so a prompt injection has no shell/python to route around the allowlist. Unattended runs are permitted only inside a scope. See [Agents](#agents--reusable-roles-with-bound-databases) and [Security model](#security-model).
 - **Ask once, see everything** — schedules bound to sessions run on cron (or just say "每天早上 8 點…" in any door); `read_schedule_digest` gives the latest result of every scheduled job across all sessions, problems first, so "how are things today?" is one question. See [Schedules & the morning digest](#schedules--the-morning-digest).
 - **Print from any door** — upload a file and say *"列印"* / *"print 2 copies, double-sided"* in chat or Telegram and it is on the printer about a second later, through CUPS, with the job number and printer warnings such as low toner. Word / Excel / PowerPoint are converted with LibreOffice first; printing as one step of a bigger job ("整理成題庫再印出來") is a tool call. See [Printing](#printing).
-- **Control your home through Home Assistant** — *"關客廳燈"*, *"冷氣開 26 度"*, *"家裡有哪些設備離線"* are answered in about a second by Home Assistant, which speaks to 米家 / Xiaomi, Google TV and 2,000+ other integrations; the 小愛音箱 can speak announcements or run spoken commands for infrared devices. Locks, alarms and garage doors wait for you to reply *"確認 <code>"*. See [Smart home](#smart-home-home-assistant).
+- **Control your home through Home Assistant** — *"關客廳燈"*, *"冷氣開 26 度"*, *"家裡有哪些設備離線"* are answered in about a second by Home Assistant, which speaks to 米家 / Xiaomi, Google TV and 2,000+ other integrations; the 小愛音箱 can speak announcements and reminders, play music, or run spoken commands for infrared devices. Locks, alarms and garage doors wait for you to reply *"確認 <code>"*. See [Smart home](#smart-home-home-assistant).
 - **Deadlines that follow the work** — time spent waiting for a human approval, and time a tool declared up front (`http_post timeout=2700` for a 31-minute video render), extend the subtask deadline instead of being billed against it. A stuck agent is still caught in minutes; a slow-but-progressing one isn't killed.
 - **Voice fast path** *(experimental)* — `POST /voice/ask` routes a spoken question to the cheapest lane that can answer it: templates (0 ms), a small model over the digest (~0.5 s), or a background task with a spoken acknowledgement. The big model is never in the conversational path.
 - **Three LLM modes, one toggle** — *Local only* / *Mixed* (default — local with cloud safety net) / *Full Cloud LLM* (skip Ollama entirely, route every subtask through your cloud provider). Pick per-app in Settings; per-session "Local only" override always wins for privacy-sensitive work.
@@ -392,10 +392,23 @@ On a headless Linux server run `sudo loginctl enable-linger $USER` once so the u
 **Upgrading:** the service does not hot-reload, so after every pull it needs a restart. One command does the whole thing:
 
 ```bash
-openteddy update        # git pull --ff-only → pip install if requirements changed → service restart → health
+openteddy update        # git pull --ff-only → install missing / changed requirements → service restart → health
 ```
 
 (Installed with `--system`? `openteddy update --system`.)
+
+**Deploying to another machine** from your development checkout — push
+first, the target pulls from GitHub:
+
+```bash
+./deploy.sh user@host[:/path]     # pull → requirements → restart → health check on the target
+./deploy.sh user@host --autostash # the target has local edits in files this update touches
+```
+
+Local edits on the target are kept; git refuses a pull that would
+overwrite them, and `--autostash` sets them aside and re-applies them,
+stopping before the restart if they conflict. Add your own short names
+(like `home`) in the script's `case` block.
 
 > ⚠️ **`--host 0.0.0.0` opens the agent to every machine that can reach the port.** The agent has `shell_exec_write` / `delete_file` and other powerful tools. Only use `0.0.0.0` when you trust every device on that network — a private home LAN, a Tailscale tailnet, or a server behind a real firewall. For public servers, put it behind nginx / Caddy / Cloudflare Tunnel with auth. **For "I want to use OpenTeddy from my phone", the recommended setup is `--host 0.0.0.0` + Tailscale — see [Remote Access](#remote-access-phone--telegram--tailscale).**
 
@@ -594,6 +607,32 @@ ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
 ```
 
 Each node owns its own browser profile + cookies; no cross-node cookie sync needed. If you want fleet-wide cookie sharing (one login, all nodes inherit), drop a `storage_state.json` (Playwright format) at `/var/lib/openteddy/storage_state.json` — `chrome_attached_tool` auto-injects it on every attach. See [`scripts/capture-edge-state.md`](scripts/capture-edge-state.md) for the capture recipe.
+
+### If the box runs hot or powers off
+
+A compact box such as the DGX Spark / GX10 can cut its own power under
+sustained load. When that happens the system log simply stops — no
+shutdown sequence, no kernel error — because the firmware does it. To see
+what led up to it, run the flight recorder, which writes GPU temperature
+and power, the hottest thermal zone, free memory, load and the busiest
+process to disk every 2 s:
+
+```bash
+systemd-run --user --unit=power-recorder --collect ./scripts/power_recorder.sh   # runs until reboot
+tail -30 ~/power-recorder.csv                                                     # after a power-off
+```
+
+Things that turned out to matter on one machine:
+
+- **A crash-looping service**: a leftover `openteddy-vllm` unit had
+  restarted 126,000 times, initialising the GPU every 14 s. Look for
+  `systemctl list-units --failed` and high `NRestarts`.
+- **Background clients of the model**: anything that calls Ollama on a
+  timer (trading bots, agent heartbeats) keeps the GPU at full power
+  around the clock. Ollama's log shows each request's source address and
+  duration.
+- **One `num_ctx` per model**: a client that asks for a different context
+  length reloads the model every time it switches.
 
 ## Remote Access (phone / Telegram / Tailscale)
 
@@ -890,6 +929,15 @@ agent has a tool scope auto-approves high-risk tools after the
 destructive denylist; an unscoped agent's schedule still waits for a
 human. Scheduled runs are capped at 10 minutes.
 
+**Is the scheduler running?** Schedules need the `APScheduler` package.
+`GET /health` reports `"scheduler": "running" | "stopped" | "disabled"`, and
+`openteddy health` prints a warning when it is disabled. On such a machine
+a schedule request is answered with the fix instead of being handed to the
+agent: an agent once "scheduled" a reminder by writing a script that
+nothing ever ran. `openteddy update` and `deploy.sh` now install any
+missing requirement on every update, so a venv that missed a package
+doesn't stay broken.
+
 ### Only call me when it matters (`notify_when`)
 
 A schedule that reports every morning is a feed; one that speaks up only
@@ -1023,11 +1071,25 @@ Telegram / chat / schedule ──▶ OpenTeddy ──▶ Home Assistant ──�
 | *"關客廳燈"*, *"冷氣開 26 度"*, *"電視音量調小"* | direct, ~1 s | Home Assistant's Assist runs it; if Assist doesn't understand, the agent takes over with the `home_*` tools |
 | *"家裡有哪些設備離線"*, *"有設備斷線嗎"* | direct, <0.1 s | offline devices, one row per physical device, with room and how long |
 | *"家裡有哪些設備"* | direct | every device by room, online / offline |
-| *"叫小愛說晚餐好了"* | agent | the 小愛音箱 says it (`xiaoai`, mode `say`) |
-| *"叫小愛打開冷氣"* | agent | sent to 小愛 as if spoken (mode `command`) — reaches infrared devices only 小愛 controls |
+| *"叫小愛說晚餐好了"*, *"請小愛提醒出門"* | direct, ~1 s | the 小愛音箱 says it (`xiaoai`, mode `say`) |
+| *"叫小愛打開冷氣"*, *"跟小愛說打開電視"* | direct, ~1 s | sent to 小愛 as if spoken (mode `command`) — reaches infrared devices only 小愛 controls |
+| *"播放音樂"*, *"放點輕音樂"*, *"我想聽周杰倫的歌"*, *"小米音箱下一首"*, *"小愛音量調到 30"*, *"停止音樂"* | direct, ~1 s | a spoken command to 小愛, which plays from its own music service |
+| *"請小愛音箱週一到週五早上 7:40 提醒出門"* | schedule | a weekday schedule; every run goes straight to the speaker, with no model call |
 | *"我出門了，把該關的都關掉"* | agent | `home_overview` / `home_devices` → `home_control` for each |
 | *"每天早上 9 點檢查有沒有設備離線，有才通知我"* | schedule | a daily check that pings Telegram only when something is offline |
 | *"確認 1234"* | direct | runs an action that was held for confirmation |
+
+The speaker answers to *小愛*, *小愛同學*, *小愛音箱 Pro*, *小米(AI)音箱*,
+*智慧音箱* or *音箱*. Commands to 小愛 must be Chinese, so English play / stop
+requests are translated. Recurring or future wording (*每天*, *週一*, *明天*)
+is never played on the spot — it becomes a schedule. Requests that mention
+the TV, or creative ones such as *"我要製作睡眠音樂"*, are not sent to the
+speaker.
+
+A message that mentions a device or the speaker always keeps its tools:
+when Assist can't handle it, the agent takes it with the `home_*` and
+`xiaoai` tools. It never lands on the chat lane, which has no tools and
+would only describe what it can't do.
 
 "Offline" means none of a device's entities has a real state and at least
 one is unavailable — buttons stay `unknown` forever, and cloud integrations
@@ -1127,6 +1189,7 @@ What the runtime enforces, and what stays the operator's job.
 | Enforced by OpenTeddy | How |
 |---|---|
 | Destructive SQL never runs | `DELETE` / `DROP` / `TRUNCATE` / `UPDATE` are refused by every DB tool — including `db_execute`, and **regardless of approval state**; comments, multi-statement and CTE tricks are caught |
+| Secrets stay out of logs | HTTP client request lines are not logged, and every log line and traceback has Telegram bot tokens, `?key=` / `?token=` parameters and Bearer tokens masked — in the journal and in the diagnostics log buffer |
 | Secrets never reach the model | DB URLs and API credentials are write-only: not in prompts, not in API responses, redacted from errors. `python_exec` cannot obtain them |
 | Credentials only go where you said | `{{CRED:name}}` resolves only for allow-listed hosts; requests to other hosts are refused |
 | Tool scope | a scoped agent can use only `allowed_tools`, enforced at execution, not just in what the model is shown |

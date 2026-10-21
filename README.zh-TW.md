@@ -112,7 +112,7 @@ cd ~/OpenTeddy && ./run.sh --open                       # 儀表板在 http://lo
 - **Web 儀表板** — 提交任務、即時看工具呼叫、審核敏感指令、管理記憶、即時顯示「已省 $X vs GPT-4」，還有 GFM 表格 + Chart.js 數值標籤 HTML 報表。
 - **Capabilities tab** — 內建 Tools 跟自動長出來的 Skills 合併在同一個可篩選列表，type badge 標明來源；技能用越多自動從 TESTING 升 ACTIVE。
 - **上傳就能列印** — 在對話或 Telegram 上傳檔案，說「列印」或「印 2 份 雙面」，大約一秒就送到印表機（透過 CUPS），回覆附工作編號和碳粉不足之類的提醒。Word / Excel / PowerPoint 會先用 LibreOffice 轉成 PDF；「整理成題庫再印出來」這種要先做事的，由 agent 做完再呼叫列印工具。詳見 [列印](#列印)。
-- **透過 Home Assistant 控制家裡的設備** — 「關客廳燈」、「冷氣開 26 度」、「家裡有哪些設備離線」大約一秒由 Home Assistant 完成；它能接米家、Google TV 和兩千多種品牌。小愛音箱可以播報，也能代你下語音指令控制紅外線家電。門鎖、保全、車庫門會等你回覆「確認 代碼」才動作。詳見 [智慧家庭](#智慧家庭home-assistant)。
+- **透過 Home Assistant 控制家裡的設備** — 「關客廳燈」、「冷氣開 26 度」、「家裡有哪些設備離線」大約一秒由 Home Assistant 完成；它能接米家、Google TV 和兩千多種品牌。小愛音箱可以播報、定時提醒、放音樂，也能代你下語音指令控制紅外線家電。門鎖、保全、車庫門會等你回覆「確認 代碼」才動作。詳見 [智慧家庭](#智慧家庭home-assistant)。
 - **從 Telegram 驅動 OpenTeddy** — 在 Settings → Notification Credentials 填一支 bot token + 白名單 chat_id 後，手機上就能用 Telegram 下任務：發任何文字當 goal，也可以傳文件或照片（存進 session 的 `uploads/`，給下一句話用）；處理時會出現一個小小的「Thinking」動畫，回答會排版成正常的文字而不是一堆 `###`、`**` 符號，另外附上 `📎 Files produced`（文字檔直接 inline 顯示，二進位走 sendDocument 變附件）。每則訊息都看得到最近幾輪對話。自動 approve 高風險工具讓日常任務不卡 — 但 hard denylist（`rm`、`rmdir`、`DROP TABLE`、`TRUNCATE TABLE`、`DELETE FROM`、`mkfs`、`dd if=…/of=/dev/…` 等）絕對擋住破壞性指令。命令：`/start`、`/help`、`/cancel`、`/new`。詳見 [遠端存取](#遠端存取手機--telegram--tailscale)。
 - **手機友善的 Web UI 透過 Tailscale** — `./run.sh --host 0.0.0.0` + 自家 tailnet 就讓 dashboard 在手機瀏覽器上能用。Sessions / chat / artifact 預覽都 responsive；手機寬度時 session header 會自動把記憶 / 隱私 / 匯出收進右上 ⋯ kebab。不用 port forward、不用 nginx、不用公網 DNS — 手機裝 Tailscale app 直接連 `http://<你的機器名>:8000`。
 - **macOS 原生客戶端** — Tauri 2.x 殼，引導精靈（Ollama 一鍵安裝 + 機器分級拉模型）、語言切換器、模式鎖定、可自由拖動的視窗、自動更新、診斷下載。詳見 [`desktop/`](desktop/)。
@@ -258,6 +258,38 @@ ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
 
 每台節點擁有自己的 browser profile + cookies；不必跨節點同步。如果要做「一次登入、全 fleet 共用」，把 Playwright 格式的 `storage_state.json` 放到 `/var/lib/openteddy/storage_state.json`，`chrome_attached_tool` 會在每次 attach 時自動注入。詳見 [`scripts/capture-edge-state.md`](scripts/capture-edge-state.md)。
 
+### 更新與部署到另一台機器
+
+服務不會自動重新載入，每次更新後要重啟。`openteddy update` 一次做完：`git pull` → 安裝缺少或有變動的套件 → 重啟服務 → 健康檢查。現在每次更新都會補裝缺少的套件，不只在 `requirements.txt` 有變動時才裝，所以曾經漏裝套件的環境不會一直壞下去。
+
+從開發機部署到另一台（先 `git push`，目標機會從 GitHub 拉）：
+
+```bash
+./deploy.sh user@host[:/path]     # 在目標機 pull → 套件 → 重啟 → 健康檢查
+./deploy.sh user@host --autostash # 目標機有本地修改，而這次更新剛好動到同一個檔案
+```
+
+目標機上的本地修改會保留。詳見 [docs/cli.md](docs/cli.md)。
+
+### 排程沒有執行？
+
+排程需要 `APScheduler` 套件。`GET /health` 會回報 `"scheduler": "running" | "stopped" | "disabled"`，`openteddy health` 在停用時會提醒你。排程功能停用時，你說「每天 7:40 提醒我…」會直接得到修正方法，不會再交給 agent 自己發揮：曾經有 agent 寫了一支沒有任何東西會執行的腳本，然後回報「已排好」。
+
+### 機器很熱或自己斷電
+
+DGX Spark / GX10 這類小主機在長時間高負載下可能自己斷電，系統紀錄會直接中斷，沒有關機流程也沒有錯誤訊息，因為是韌體切的電。要知道斷電前發生什麼事，可以開飛行紀錄器，它每 2 秒把 GPU 溫度與功耗、最熱的溫度區、可用記憶體、負載和最忙的程式寫進硬碟：
+
+```bash
+systemd-run --user --unit=power-recorder --collect ./scripts/power_recorder.sh   # 執行到重開機為止
+tail -30 ~/power-recorder.csv                                                     # 斷電後查看
+```
+
+在一台機器上實際查到的原因：
+
+- **一直重啟的服務**：遺留的 `openteddy-vllm` 服務重啟了 126,000 次，每 14 秒初始化一次 GPU。用 `systemctl list-units --failed` 和 `NRestarts` 檢查。
+- **背景呼叫模型的程式**：定時呼叫 Ollama 的程式（交易機器人、agent 的心跳）會讓 GPU 全天滿載。Ollama 的紀錄會列出每次請求的來源位址和耗時。
+- **每個模型只用一種 `num_ctx`**：用不同 context 長度呼叫同一個模型，每次切換都會重新載入。
+
 ## 遠端存取（手機 / Telegram / Tailscale）
 
 兩條互補的路徑可以在不在主機旁邊時操作 OpenTeddy。兩者打到同一個 server、同一份 sessions —— 你可以在通勤時用 Telegram 開一個 goal，回家後在桌面 web UI 看完整 artifact。
@@ -341,6 +373,7 @@ ansible all -m shell -a "bash /opt/openteddy/scripts/quickstart.sh"
 - **硬性白名單**：不在白名單的 chat_id 來訊**直接沈默丟掉**（不留 probe signal）。白名單空 = inbound 連啟動都不啟動，就算 toggle 開了也一樣。
 - **Auto-approve 高風險工具**：你白名單的 chat_id 本身就是 consent signal — `shell_exec_write` / `python_exec` / `file_write` 都不會卡 approval prompt（反正你也不在 web UI 旁邊）。
 - **Denylist 硬擋破壞行為**：無論 approve 與否，tool registry 會擋 `rm` / `rmdir` / `unlink` / `git rm` / `shred`、SQL `DROP TABLE` / `DROP DATABASE` / `TRUNCATE TABLE` / `DELETE FROM`、系統層 `mkfs` / `dd if=…/of=/dev/…` / `> /dev/sd[a-z]` / `fdisk` / `format X:` / 遞迴 `chmod 0…`，以及任何工具名含 `delete` / `remove` / `drop_table` / `truncate` / `wipe` / `purge`。被擋會明確告訴你「open the web UI 手動 approve」。
+- **日誌不會留下 token**：HTTP 套件的每筆請求不再寫進日誌，每一行日誌和錯誤追蹤裡的 Telegram bot token、`?key=` / `?token=` 參數和 Bearer token 都會遮蔽，系統日誌和診斷用的日誌緩衝都一樣。
 - **10 分鐘 hard timeout**：每個 Telegram-driven run 用 `asyncio.wait_for(timeout=600)` 包住，Ollama 掛掉、tool deadlock 都不會把 chat 卡死 — 10 分鐘整 bot 會回「⌛ Task ran longer than 10 min and was force-cancelled」而不是無聲沈默。
 
 #### 排查
@@ -413,11 +446,17 @@ Telegram / 對話 / 排程 ──▶ OpenTeddy ──▶ Home Assistant ──�
 | 「關客廳燈」、「冷氣開 26 度」、「電視音量調小」 | 直接，約 1 秒 | 交給 Home Assistant 的 Assist 執行；它聽不懂時改由 agent 用 `home_*` 工具處理 |
 | 「家裡有哪些設備離線」、「有設備斷線嗎」 | 直接，不到 0.1 秒 | 列出離線設備，一台設備一行，附房間和離線多久 |
 | 「家裡有哪些設備」 | 直接 | 按房間列出所有設備和在線狀態 |
-| 「叫小愛說晚餐好了」 | agent | 小愛音箱把這句話唸出來（`xiaoai`，模式 `say`） |
-| 「叫小愛打開冷氣」 | agent | 像你親口對小愛說一樣（模式 `command`），可以控制只有小愛能控制的紅外線家電 |
+| 「叫小愛說晚餐好了」、「請小愛提醒出門」 | 直接，約 1 秒 | 小愛音箱把這句話唸出來（`xiaoai`，模式 `say`） |
+| 「叫小愛打開冷氣」、「跟小愛說打開電視」 | 直接，約 1 秒 | 像你親口對小愛說一樣（模式 `command`），可以控制只有小愛能控制的紅外線家電 |
+| 「播放音樂」、「放點輕音樂」、「我想聽周杰倫的歌」、「小米音箱下一首」、「小愛音量調到 30」、「停止音樂」 | 直接，約 1 秒 | 當成語音指令交給小愛，由它自己的音樂服務播放 |
+| 「請小愛音箱週一到週五早上 7:40 提醒出門」 | 排程 | 建立平日排程，每次執行都直接送到音箱，不經過模型 |
 | 「我出門了，把該關的都關掉」 | agent | `home_overview` / `home_devices` 找設備，再逐一 `home_control` |
 | 「每天早上 9 點檢查有沒有設備離線，有才通知我」 | 排程 | 每天檢查，有設備離線才傳 Telegram |
 | 「確認 1234」 | 直接 | 執行先前被暫停、等你確認的動作 |
+
+音箱可以叫「小愛」、「小愛同學」、「小愛音箱 Pro」、「小米（AI）音箱」、「智慧音箱」或「音箱」。給小愛的指令必須是中文，所以英文的播放、停止會自動轉成中文。說到「每天」、「週一」、「明天」這類重複或未來的時間，不會立刻播放，而是建立排程。提到電視，或「我要製作睡眠音樂」這種創作要求，不會送到音箱。
+
+提到設備或音箱的訊息一定保留工具：Assist 處理不了時，交給有 `home_*` 和 `xiaoai` 工具的 agent，絕不會落到沒有工具的聊天模式，只回你一句「我沒辦法控制設備」。
 
 「離線」的判斷：一台設備的所有項目都沒有實際狀態，而且至少一項無法使用才算。按鈕類的項目永遠是 `unknown`，雲端整合也會讓正常設備的個別功能顯示無法使用，這些都不算離線。
 
