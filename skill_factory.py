@@ -137,6 +137,15 @@ class SkillFactory:
         skill_test_before_register off, the old syntax-check-only path and
         TESTING status are preserved.
         """
+        # A skill must never share a tool's name: the planner can't tell them
+        # apart, and a "browser_fetch" skill shadowed the browser_fetch tool.
+        try:
+            from tool_registry import tool_registry as _tools
+            if name in getattr(_tools, "_tools", {}):
+                logger.warning("Skill name %r collides with a tool; renaming to %r", name, name + "_skill")
+                name = name + "_skill"
+        except Exception:  # noqa: BLE001
+            pass
         logger.info("Generating skill '%s'…", name)
         input_keys = input_keys or []
         test_on = bool(getattr(config, "skill_test_before_register", True))

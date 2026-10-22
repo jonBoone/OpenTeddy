@@ -972,6 +972,17 @@ class Orchestrator:
             if _print_cmd is not None:
                 return await self._direct_print(req, _print_cmd)
 
+        # ── 0a′. Weather: "桃園今天天氣" → Open-Meteo, no model ──────────────
+        # Without a search key the agent had no dependable source and once
+        # answered from a skill that scraped the Taipei Dome's calendar.
+        try:
+            from weather import parse_weather_question
+            _wq = parse_weather_question(req.goal)
+        except Exception:  # noqa: BLE001
+            _wq = None
+        if _wq is not None:
+            return await self._weather(req, _wq)
+
         # ── 0b. Home: "確認 1234" and short device commands → Home Assistant ──
         # "關客廳燈" goes to HA Assist and is done in about a second; if Assist
         # doesn't understand, the normal pipeline (with the home_* tools)
@@ -1413,6 +1424,18 @@ class Orchestrator:
             return await self._finish_direct(req, f"❌ {exc}", False)
         return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
 
+    async def _weather(self, req: TaskRequest, q: Any) -> TaskResult:
+        import weather
+        try:
+            return await self._finish_direct(req, await weather.forecast(q), True)
+        except ValueError as exc:                       # unknown place
+            return await self._finish_direct(req, f"❌ {exc}", False)
+        except Exception as exc:  # noqa: BLE001 — network / API trouble
+            logger.warning("Weather lookup failed: %s", exc)
+            msg = ("❌ 天氣服務暫時連不上（Open-Meteo），請稍後再試。" if q.zh
+                   else "❌ The weather service (Open-Meteo) can't be reached right now.")
+            return await self._finish_direct(req, msg, False)
+
     async def _home_xiaoai(self, req: TaskRequest, mode: str, text: str) -> TaskResult:
         """叫小愛說… / 叫小愛打開冷氣 — straight to the speaker, no model,
         so a 07:40 weekday reminder doesn't depend on a planning round."""
@@ -1555,7 +1578,10 @@ class Orchestrator:
         """Ask Gemma to decompose the goal into SubTasks.
         Injects relevant memory context into the system prompt when available."""
         active_skills = await self.skill_factory.list_active_skills()
-        skill_names   = [s.name for s in active_skills]
+        # Skills named like a tool are hidden: the planner would pick them
+        # as a "skill" when it meant the tool (see Executor._try_skill).
+        from tool_registry import tool_registry as _tools
+        skill_names   = [s.name for s in active_skills if s.name not in getattr(_tools, "_tools", {})]
 
         # ── Retrieve long-term memory context ────────────────────────────────
         # Scoped to the request's session_id so cross-project memories don't

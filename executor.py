@@ -1931,23 +1931,23 @@ class Executor:
     async def _try_skill(
         self, subtask: SubTask, context: Dict
     ) -> Optional[Tuple[bool, str]]:
-        """Return (success, output) if a matching active skill exists, else None."""
+        """Return (success, output) when the planner named an active skill
+        for this subtask, else None.
+
+        Only an explicit skill_hint counts. A word-overlap fallback ("any
+        word of the skill's name appears in the description") let a skill
+        named `browser_fetch` — learned from Taipei Dome event lookups —
+        answer every subtask that said "fetch" or "browser": "給我桃園今天的
+        天氣" returned the Dome's calendar 25 times, each counted as a
+        success. A skill that shares a tool's name is never invoked as a
+        skill; the planner almost always meant the tool."""
+        if not subtask.skill_hint:
+            return None
+        from tool_registry import tool_registry as _tools
+        if subtask.skill_hint in getattr(_tools, "_tools", {}):
+            return None
         skills = await self.skill_factory.list_active_skills()
-        best: Optional[str] = None
-
-        if subtask.skill_hint:
-            for s in skills:
-                if s.name == subtask.skill_hint:
-                    best = s.name
-                    break
-
-        if not best:
-            desc_lower = subtask.description.lower()
-            for s in skills:
-                if any(kw in desc_lower for kw in s.name.replace("_", " ").split()):
-                    best = s.name
-                    break
-
+        best: Optional[str] = next((s.name for s in skills if s.name == subtask.skill_hint), None)
         if not best:
             return None
 
