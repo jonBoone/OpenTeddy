@@ -972,6 +972,15 @@ class Orchestrator:
             if _print_cmd is not None:
                 return await self._direct_print(req, _print_cmd)
 
+        # ── 0a″. 自我體檢: "幫我做自我體檢" → report from the records, no model ──
+        try:
+            from self_review import parse_review_request
+            _review_days = parse_review_request(req.goal)
+        except Exception:  # noqa: BLE001
+            _review_days = None
+        if _review_days:
+            return await self._self_review(req, _review_days)
+
         # ── 0a′. Weather: "桃園今天天氣" → Open-Meteo, no model ──────────────
         # Without a search key the agent had no dependable source and once
         # answered from a skill that scraped the Taipei Dome's calendar.
@@ -1423,6 +1432,15 @@ class Orchestrator:
         except HA.HAError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
         return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
+
+    async def _self_review(self, req: TaskRequest, days: int) -> TaskResult:
+        import self_review
+        try:
+            rep = await self_review.build_report(self.tracker, days=days)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Self review failed")
+            return await self._finish_direct(req, f"❌ 自我體檢失敗：{type(exc).__name__}: {exc}", False)
+        return await self._finish_direct(req, rep["text"], True)
 
     async def _weather(self, req: TaskRequest, q: Any) -> TaskResult:
         import weather

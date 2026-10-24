@@ -3532,6 +3532,16 @@ async def list_printers_endpoint() -> dict:
     return {"success": True, "printers": printers, "default": default, "status": status, "error": None}
 
 
+@app.get("/review")
+async def self_review_endpoint(days: int = 7) -> dict:
+    """每週自我體檢: what went wrong in the last `days` days, from the
+    task records — repeats, give-ups, hijacking skills, failures,
+    schedules, compute time, environment. No model call."""
+    import self_review
+    rep = await self_review.build_report(tracker, days=days)
+    return {"success": True, "days": rep["days"], "text": rep["text"], "findings": rep["findings"]}
+
+
 @app.get("/home/status")
 async def home_status_endpoint() -> dict:
     """Home Assistant connection check for Settings → Home Assistant:

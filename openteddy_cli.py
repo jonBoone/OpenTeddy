@@ -480,6 +480,13 @@ def cmd_models(rt: Runtime, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(rt: Runtime, a: argparse.Namespace) -> int:
+    """每週自我體檢 — print the report (or JSON with --json)."""
+    r = rt.req("GET", f"/review?days={int(a.days)}")
+    rt.out(r, r.get("text", ""))
+    return 0
+
+
 def cmd_health(rt: Runtime, a: argparse.Namespace) -> int:
     h = rt.req("GET", "/health")
     rt.out(h, f"✓ runtime up  v{h.get('version', '?')}  @ {rt.url}")
@@ -802,6 +809,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("tools", help="list tools and their risk level").set_defaults(fn=cmd_tools)
     sub.add_parser("models", help="which models/engine the runtime uses").set_defaults(fn=cmd_models)
     sub.add_parser("health", help="is the runtime up").set_defaults(fn=cmd_health)
+
+    rv = sub.add_parser("review", help="self check-up: what went wrong lately (自我體檢)")
+    rv.add_argument("--days", type=int, default=7)
+    rv.set_defaults(fn=cmd_review)
 
     up = sub.add_parser("update", help="git pull, install deps if needed, restart the service")
     up.add_argument("--system", action="store_true", help="the service was installed with --system")

@@ -217,6 +217,10 @@ e.g. '每天 09:00' or 'every Monday at 08:00'>",
   "confidence":  <float 0.0 to 1.0>
 }
 
+task_goal must keep every device, speaker, person or channel the user named — \
+"請小愛音箱每天 7:40 提醒出門" → "請小愛音箱提醒：該出門了", never "提醒使用者出門" \
+(without the speaker the reminder has nowhere to go).
+
 When notify_when is set, task_goal must still include computing whatever the \
 condition needs (e.g. the comparison against the previous days) — the \
 condition is evaluated on the task's result.
@@ -224,6 +228,20 @@ condition is evaluated on the task's result.
 Set confidence high (>0.8) when both the time AND the action are clear.
 Set low (<0.5) when the time is fuzzy or the action is missing.
 """
+
+
+_SPEAKER = re.compile(r"小[愛爱](?:同學)?(?:音箱)?|小米\s*(?:ai\s*)?音箱|智慧音箱|音箱", re.I)
+
+
+def _keep_speaker(text: str, task_goal: str) -> str:
+    """The request named 小愛 / the speaker but the extracted goal lost it
+    ("提醒使用者出門"): put it back in the form the 小愛 direct path runs."""
+    if not task_goal or not _SPEAKER.search(text or "") or _SPEAKER.search(task_goal):
+        return task_goal
+    if task_goal.startswith("提醒"):
+        rest = re.sub(r"^提醒(?:使用者|用戶|我|你|大家)?\s*[:：]?\s*", "", task_goal)
+        return f"請小愛音箱提醒{rest}"
+    return f"叫小愛{task_goal}"
 
 
 async def llm_extract(text: str) -> Optional[SchedulingIntent]:
@@ -293,7 +311,7 @@ async def llm_extract(text: str) -> Optional[SchedulingIntent]:
         return None
 
     cron = (data.get("cron") or "").strip()
-    task_goal = (data.get("task_goal") or "").strip()
+    task_goal = _keep_speaker(text, (data.get("task_goal") or "").strip())
     if not cron or not task_goal:
         return None
 
