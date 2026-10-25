@@ -47,10 +47,11 @@ _TW_EN = {"taipei": "台北", "new taipei": "新北", "taoyuan": "桃園", "hsin
           "taitung": "台東", "pingtung": "屏東", "chiayi": "嘉義", "miaoli": "苗栗", "changhua": "彰化",
           "nantou": "南投", "yunlin": "雲林", "penghu": "澎湖", "kinmen": "金門"}
 
-_WEATHER = re.compile(r"(天氣|氣溫|下雨|降雨|雨量|帶傘|帶雨傘|颱風|冷不冷|熱不熱|幾度|weather|forecast|"
+# 颱風 is not here: a typhoon question wants the storms (typhoon.py), not the local forecast.
+_WEATHER = re.compile(r"(天氣|氣溫|下雨|降雨|雨量|帶傘|帶雨傘|冷不冷|熱不熱|幾度|weather|forecast|"
                       r"\brain\b|raining|temperature outside|how (?:hot|cold))", re.I)
 # Work about weather (reports, analysis, history) or a reminder → the agent / scheduler.
-_NOT_A_QUESTION = re.compile(r"(寫|整理|報告|分析|總結|寄|翻譯|比較|歷史|統計|趨勢|圖表|提醒|排程|每天|每週|每周|"
+_NOT_A_QUESTION = re.compile(r"(颱風|台風|typhoon|寫|整理|報告|分析|總結|寄|翻譯|比較|歷史|統計|趨勢|圖表|提醒|排程|每天|每週|每周|"
                              r"csv|excel|email|report|analy[sz]|history|remind|every)", re.I)
 _DEVICE = re.compile(r"(冷氣|空調|客廳|臥室|房間|室內|indoor)", re.I)
 _CJK = re.compile(r"[㐀-鿿]")

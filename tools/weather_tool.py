@@ -26,6 +26,31 @@ async def weather_forecast(location: str = "", days: int = 1, start: int = 0,
         return make_result(False, error=f"{type(exc).__name__}: {exc}", duration_ms=int((time.monotonic() - t0) * 1000))
 
 
+async def typhoon_status(language: str = "zh") -> Dict[str, Any]:
+    t0 = time.monotonic()
+    try:
+        import typhoon
+        text = await typhoon.report(zh=(language or "zh").lower().startswith("zh"))
+        return make_result(True, result=text, duration_ms=int((time.monotonic() - t0) * 1000))
+    except Exception as exc:  # noqa: BLE001
+        return make_result(False, error=f"{type(exc).__name__}: {exc}", duration_ms=int((time.monotonic() - t0) * 1000))
+
+
+_SCHEMA_TY: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "typhoon_status",
+        "description": (
+            "Active typhoons / tropical storms in the Northwest Pacific right now (Japan "
+            "Meteorological Agency): strength, distance from Taiwan, direction, whether each "
+            "is approaching and its forecast closest approach. Use for any typhoon question "
+            "instead of searching or scraping."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "language": {"type": "string", "description": "zh (default) or en"}}},
+    },
+}
+
 _SCHEMA: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -48,4 +73,7 @@ _SCHEMA: Dict[str, Any] = {
     },
 }
 
-WEATHER_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [(weather_forecast, _SCHEMA, "low")]
+WEATHER_TOOLS: List[Tuple[Any, Dict[str, Any], RiskLevel]] = [
+    (weather_forecast, _SCHEMA, "low"),
+    (typhoon_status, _SCHEMA_TY, "low"),
+]

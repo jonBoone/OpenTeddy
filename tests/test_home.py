@@ -297,7 +297,7 @@ async def test_orchestrator() -> None:
     def fake():
         o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=planner,
                                   _classify_intent=planner, _fast_chat_response=planner)
-        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_home_overview", "_home_xiaoai",
+        for name in ("_finish_direct", "_home_fast", "_home_confirm", "_home_overview", "_home_xiaoai", "_asked_again", "_typhoon",
                      "_direct_print", "_recent_uploads"):
             setattr(o, name, (lambda n: lambda *a, **k: getattr(Orchestrator, n)(o, *a, **k))(name))
         return o

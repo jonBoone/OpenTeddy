@@ -972,14 +972,33 @@ class Orchestrator:
             if _print_cmd is not None:
                 return await self._direct_print(req, _print_cmd)
 
+        # ── Asked again? ─────────────────────────────────────────────────
+        # The same question within 10 minutes means the last answer missed
+        # ("最近有颱風靠近台灣嗎" got the local forecast twice). Informational
+        # shortcuts step aside, the agent keeps its tools, and the planner is
+        # told not to repeat itself. Actions (print, device commands) still
+        # run directly: doing them twice can be intended.
+        _again = await self._asked_again(req)
+        if _again:
+            req.context["asked_again"] = True
+
         # ── 0a″. 自我體檢: "幫我做自我體檢" → report from the records, no model ──
         try:
             from self_review import parse_review_request
             _review_days = parse_review_request(req.goal)
         except Exception:  # noqa: BLE001
             _review_days = None
-        if _review_days:
+        if _review_days and not _again:
             return await self._self_review(req, _review_days)
+
+        # ── 0a‴. Typhoons: "最近有颱風靠近台灣嗎" → JMA's active storms, no model ──
+        try:
+            from typhoon import parse_typhoon_question
+            _ty = parse_typhoon_question(req.goal)
+        except Exception:  # noqa: BLE001
+            _ty = None
+        if _ty is not None and not _again:
+            return await self._typhoon(req, _ty)
 
         # ── 0a′. Weather: "桃園今天天氣" → Open-Meteo, no model ──────────────
         # Without a search key the agent had no dependable source and once
@@ -989,7 +1008,7 @@ class Orchestrator:
             _wq = parse_weather_question(req.goal)
         except Exception:  # noqa: BLE001
             _wq = None
-        if _wq is not None:
+        if _wq is not None and not _again:
             return await self._weather(req, _wq)
 
         # ── 0b. Home: "確認 1234" and short device commands → Home Assistant ──
@@ -1015,7 +1034,7 @@ class Orchestrator:
             if _xa:
                 return await self._home_xiaoai(req, *_xa)
             _home_q = parse_home_query(req.goal)
-            if _home_q:
+            if _home_q and not _again:
                 return await self._home_overview(req, _home_q)
             _home_text = parse_home_command(req.goal)
             if _home_text:
@@ -1042,7 +1061,8 @@ class Orchestrator:
         # snappy and feeling sluggish on a local model.
         # A home request picked for the chat lane automatically (Telegram's
         # lane guess) still needs its tools; an explicit chat session stays chat.
-        if (session_mode == "chat" and (req.context or {}).get("home_request")
+        if (session_mode == "chat"
+                and ((req.context or {}).get("home_request") or (req.context or {}).get("asked_again"))
                 and (req.context or {}).get("mode_override")):
             session_mode = "code"
         if session_mode == "chat":
@@ -1103,7 +1123,8 @@ class Orchestrator:
         # Any uncertainty falls through to the normal plan→execute flow.
         if (getattr(config, "intent_classifier_enabled", True)
                 and not (req.context or {}).get("db_context")
-                and not (req.context or {}).get("home_request")):
+                and not (req.context or {}).get("home_request")
+                and not (req.context or {}).get("asked_again")):
             # db_context guard: in a DB-connected session, a data question
             # ("how many factories does brand X have") is easily
             # misclassified as pure-chat — and the fast path would then
@@ -1432,6 +1453,45 @@ class Orchestrator:
         except HA.HAError as exc:
             return await self._finish_direct(req, f"❌ {exc}", False)
         return await self._finish_direct(req, HA.describe_devices(devs, only_offline=(kind == "offline")), True)
+
+    async def _asked_again(self, req: TaskRequest, within_min: int = 10) -> bool:
+        """The same question was answered in this session within the last
+        `within_min` minutes (scheduled runs never count)."""
+        if not req.session_id or (req.context or {}).get("triggered_by") == "schedule":
+            return False
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            from difflib import SequenceMatcher
+            rows = await self.tracker.list_tasks(limit=4, session_id=req.session_id)
+        except Exception:  # noqa: BLE001
+            return False
+        norm = lambda s: re.sub(r"[\s\W_]+", "", (s or "").lower())
+        me = norm(req.goal)
+        if len(me) < 2:
+            return False
+        for r in rows:
+            if r.get("id") == req.id or r.get("status") not in ("completed", "failed"):
+                continue
+            try:
+                when = _dt.fromisoformat(str(r.get("created_at")))
+            except ValueError:
+                continue
+            if _dt.utcnow() - when > _td(minutes=within_min):
+                continue
+            if SequenceMatcher(None, me, norm(r.get("goal"))).ratio() >= 0.85:
+                logger.info("Task %s repeats an answered question — skipping shortcuts", req.id)
+                return True
+        return False
+
+    async def _typhoon(self, req: TaskRequest, zh: bool) -> TaskResult:
+        import typhoon
+        try:
+            return await self._finish_direct(req, await typhoon.report(zh), True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Typhoon lookup failed: %s", exc)
+            return await self._finish_direct(
+                req, "❌ 颱風資料（日本氣象廳）暫時連不上，請稍後再試，或查中央氣象署。" if zh
+                else "❌ The typhoon data (JMA) can't be reached right now.", False)
 
     async def _self_review(self, req: TaskRequest, days: int) -> TaskResult:
         import self_review
@@ -1803,6 +1863,9 @@ class Orchestrator:
             system_prompt = memory_ctx + "\n\n" + system_prompt
 
         recent = await self._recent_turns_block(req)
+        if (req.context or {}).get("asked_again"):
+            recent += ("\n\n（注意：使用者剛剛問過幾乎一樣的問題，上一個回答沒有幫到他。"
+                       "請換個方法或工具回答，不要重複上一個回答。）")
         prompt = (
             (recent + "\n\n" if recent else "")
             + f"Goal: {req.goal}\n\n"

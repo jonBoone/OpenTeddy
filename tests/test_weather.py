@@ -145,7 +145,7 @@ async def test_orchestrator() -> None:
     async def planner(*a, **k): raise RuntimeError("planner reached")
     o = types.SimpleNamespace(tracker=_Tracker(), _emit_task_event=no_event, _plan=planner,
                               _classify_intent=planner, _fast_chat_response=planner)
-    for n in ("_finish_direct", "_weather"):
+    for n in ("_finish_direct", "_weather", "_asked_again", "_typhoon"):
         setattr(o, n, (lambda name: lambda *a, **k: getattr(Orchestrator, name)(o, *a, **k))(n))
     res = await Orchestrator.run(o, TaskRequest(goal="給我桃園今天的天氣", session_id="s1"))
     assert res.status == TaskStatus.COMPLETED and res.summary.startswith("📍 桃園"), res
