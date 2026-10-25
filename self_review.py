@@ -422,8 +422,14 @@ def parse_review_request(goal: str) -> Optional[int]:
     t = (goal or "").strip()
     if not t or len(t) > 40 or not _ASK.search(t):
         return None
+    m = re.search(r"(\d{1,2}|[一二兩两三四五六七八九十])\s*(?:天|日|days?)", t, re.I)
+    if m:
+        cn = {"一": 1, "二": 2, "兩": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+              "七": 7, "八": 8, "九": 9, "十": 10}
+        n = int(m.group(1)) if m.group(1).isdigit() else cn[m.group(1)]
+        return max(1, min(n, 90))
     if re.search(r"今天|今日|today", t, re.I):
         return 1
-    if re.search(r"這個月|本月|30\s*天|一個月|month", t, re.I):
+    if re.search(r"這個月|本月|一個月|month", t, re.I):
         return 30
     return 7

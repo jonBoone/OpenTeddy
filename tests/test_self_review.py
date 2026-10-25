@@ -144,6 +144,8 @@ async def test_orchestrator(db) -> None:
     from models import TaskRequest, TaskStatus
     assert SR.parse_review_request("幫我做自我體檢") == 7
     assert SR.parse_review_request("今天的系統體檢") == 1 and SR.parse_review_request("這個月的體檢報告") == 30
+    assert SR.parse_review_request("做最近三天的自我體檢") == 3 and SR.parse_review_request("最近 14 天的體檢報告") == 14
+    assert SR.parse_review_request("本週體檢") == 7
     assert SR.parse_review_request("我明天要去醫院做體檢") is None or True   # 做體檢 is deliberately broad
     assert SR.parse_review_request("今天天氣") is None
 
