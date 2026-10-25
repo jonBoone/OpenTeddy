@@ -205,8 +205,8 @@ async def check_skills(db, since: str) -> List[Dict[str, Any]]:
 def _expected_runs(cron: str, since: datetime, until: datetime, created: Optional[datetime]) -> Optional[int]:
     """How many times `cron` should have fired in the window (None if unknown)."""
     try:
-        from apscheduler.triggers.cron import CronTrigger
-        trig = CronTrigger.from_crontab(cron)
+        from scheduler import _cron_to_trigger
+        trig = _cron_to_trigger(cron)
     except Exception:  # noqa: BLE001
         return None
     start = max(since, created or since).replace(tzinfo=timezone.utc)

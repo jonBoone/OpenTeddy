@@ -78,6 +78,30 @@ async def test_telegram() -> None:
     print("  ✓ Telegram: scheduling unavailable → told plainly, the agent never improvises a schedule")
 
 
+def test_weekdays() -> None:
+    """Cron counts Sunday = 0; APScheduler 3 counts Monday = 0. "1-5" must
+    mean Monday–Friday — it ran Tuesday–Saturday until the names fix."""
+    from datetime import datetime, timedelta
+    def fires(cron, n=6):
+        t = scheduler._cron_to_trigger(cron)
+        cur = t.get_next_fire_time(None, datetime(2026, 10, 24, 12, 0, tzinfo=t.timezone))   # Saturday noon
+        out = []
+        for _ in range(n):
+            out.append(cur.strftime("%a")); cur = t.get_next_fire_time(cur, cur + timedelta(seconds=1))
+        return out
+    assert fires("40 7 * * 1-5") == ["Mon", "Tue", "Wed", "Thu", "Fri", "Mon"]
+    assert set(fires("0 9 * * 1")) == {"Mon"}
+    assert set(fires("0 9 * * 0")) == set(fires("0 9 * * 7")) == {"Sun"}
+    assert set(fires("0 9 * * 6,0")) == {"Sat", "Sun"}
+    assert fires("0 9 * * mon-fri") == fires("0 9 * * 1-5")
+    for bad in ("40 7 * *", "61 7 * * *"):
+        try:
+            scheduler._validate_cron(bad); raise AssertionError(bad)
+        except ValueError:
+            pass
+    print("  ✓ weekdays follow cron (1-5 = Mon–Fri, 0/7 = Sun); malformed rules still rejected")
+
+
 def test_requirements() -> None:
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "check_requirements.py")
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -95,6 +119,7 @@ def test_requirements() -> None:
 async def main() -> None:
     print("A. scheduler"); test_scheduler()
     print("B. telegram"); await test_telegram()
+    print("B′. weekdays"); test_weekdays()
     print("C. requirements"); test_requirements()
     print("\nALL SCHEDULER GUARD TESTS PASS")
 

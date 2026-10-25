@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime
@@ -299,7 +300,18 @@ def _cron_to_trigger(cron: str):
     Wrapped so cron validation is centralised — _validate_cron and
     _register_job both go through here."""
     from apscheduler.triggers.cron import CronTrigger
-    return CronTrigger.from_crontab(cron.strip())
+    fields = cron.split()
+    if len(fields) != 5:
+        raise ValueError(f"expected 5 fields, got {len(fields)}")
+    minute, hour, day, month, dow = fields
+    # Standard cron counts weekdays from Sunday = 0 (7 is Sunday too);
+    # APScheduler 3 counts from Monday = 0 and from_crontab passes the
+    # numbers through unchanged — so "1-5" (Mon–Fri) ran Tue–Sat: the
+    # weekday 07:40 reminder skipped Mondays and woke the house on
+    # Saturdays. Names mean the same thing to both.
+    names = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+    dow = re.sub(r"\d+", lambda m: names[int(m.group()) % 7], dow)
+    return CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=dow)
 
 
 def _validate_cron(cron: str) -> None:
